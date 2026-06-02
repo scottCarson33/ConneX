@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   MapPin,
   ArrowRight,
@@ -22,8 +22,26 @@ export default function App() {
   const [results, setResults] = useState([]);
   const [error, setError] = useState("");
   const [activeRouteIdx, setActiveRouteIdx] = useState(0);
+  const [serviceStatus, setServiceStatus] = useState([]);
 
   const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+
+  useEffect(() => {
+    const fetchStatus = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/service-status`);
+        if (res.ok) {
+          const data = await res.json();
+          setServiceStatus(data.data);
+        }
+      } catch (err) {
+        console.error("Failed to fetch service status:", err);
+      }
+    };
+    fetchStatus();
+    const interval = setInterval(fetchStatus, 60000); // refresh every minute
+    return () => clearInterval(interval);
+  }, [API_BASE_URL]);
 
   const handleSimulate = async (e) => {
     e.preventDefault();
@@ -82,11 +100,11 @@ export default function App() {
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[300px] bg-orange-600/10 blur-[120px] rounded-full pointer-events-none z-0" />
 
       {/* TOP LIVE STATUS TICKER */}
-      <div className="relative z-10 w-full bg-[#0a0a0f] border-b border-white/5 py-2.5 overflow-hidden flex items-center shadow-lg shadow-black/50">
-        <div className="absolute left-0 top-0 bottom-0 w-16 bg-gradient-to-r from-[#0a0a0f] to-transparent z-20" />
-        <div className="absolute right-0 top-0 bottom-0 w-16 bg-gradient-to-l from-[#0a0a0f] to-transparent z-20" />
+      <div className="relative z-10 w-full bg-[#0a0a0f] border-b border-white/5 py-2.5 overflow-hidden flex items-center shadow-lg shadow-black/50 overflow-x-auto touch-pan-x hide-scrollbar scroll-smooth">
+        <div className="absolute left-0 top-0 bottom-0 w-16 bg-gradient-to-r from-[#0a0a0f] to-transparent z-20 pointer-events-none" />
+        <div className="absolute right-0 top-0 bottom-0 w-16 bg-gradient-to-l from-[#0a0a0f] to-transparent z-20 pointer-events-none" />
 
-        <div className="ticker-track animate-marquee flex items-center gap-8 text-[11px] font-mono tracking-widest text-slate-400 uppercase">
+        <div className="ticker-track animate-marquee flex items-center gap-8 text-[11px] font-mono tracking-widest text-slate-400 uppercase w-max px-8">
           {[...Array(3)].map((_, i) => (
             <React.Fragment key={i}>
               <span className="flex items-center gap-2 text-emerald-400">
@@ -97,18 +115,29 @@ export default function App() {
                 System Online
               </span>
               <span>•</span>
-              <span className="text-orange-400">
-                N/Q/R/W: Delays (Earlier Incident)
-              </span>
-              <span>•</span>
-              <span>L: Good Service</span>
-              <span>•</span>
-              <span>G: Good Service</span>
-              <span>•</span>
-              <span className="text-yellow-400">B/D/F/M: Moderate Delays</span>
-              <span>•</span>
-              <span>LIRR: On/Close to Schedule</span>
-              <span>•</span>
+              
+              {serviceStatus.length > 0 ? (
+                serviceStatus.map((status, idx) => {
+                  let colorClass = "text-slate-400";
+                  if (status.severity === "delay") colorClass = "text-orange-400";
+                  else if (status.severity === "suspended") colorClass = "text-red-500";
+                  else if (status.severity === "planned_work") colorClass = "text-yellow-400";
+                  
+                  return (
+                    <React.Fragment key={idx}>
+                      <span className={colorClass}>
+                        {status.line_group}: {status.status}
+                      </span>
+                      <span>•</span>
+                    </React.Fragment>
+                  );
+                })
+              ) : (
+                <>
+                  <span>Connecting to MTA Feed...</span>
+                  <span>•</span>
+                </>
+              )}
             </React.Fragment>
           ))}
         </div>

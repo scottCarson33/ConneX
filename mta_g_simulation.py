@@ -7,6 +7,10 @@ import numpy as np
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timezone, timedelta
 
+# Import alternative route maps
+from alternative_routes import find_alternatives, get_headway
+from realtime_engine import engine as rt_engine
+
 # --- LOGGING & ENVIRONMENT ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -327,18 +331,26 @@ def run_competitive_simulation(itineraries: List[Dict], live_telemetry: Dict[str
     severe_delays = {r["route_index"]: 0 for r in itineraries}
     missed_transfers = {r["route_index"]: 0 for r in itineraries}
     early_transfers = {r["route_index"]: 0 for r in itineraries}
-    all_durations = {r["route_index"]: [] for r in itineraries}
-
+    all_durations = {r["route_index"]: [] for r in itineraries} 
+    
     MIN_HEADWAY = 5.0
 
     for _ in range(num_trials):
         trial_durations = {}
+        trial_line_offsets = {}
+        trial_line_delays = {}
+        
+        def get_trial_line_schedule(line, tod):
+            if line not in trial_line_offsets:
+                h = get_headway(line, tod) or 10.0
+                trial_line_offsets[line] = random.uniform(0, h)
+                data = live_telemetry.get(line, {"delay": 0.0, "has_alert": False})
+                gamma_delay = np.random.gamma(3, 3) if data["has_alert"] else np.random.gamma(1.5, 2.0)
+                trial_line_delays[line] = data["delay"] + gamma_delay
+            return trial_line_offsets[line], trial_line_delays[line], get_headway(line, tod) or 10.0
 
         for route in itineraries:
-            # 1. Calculate how much walking happens BEFORE the first train
-            first_train = None
-            initial_walk_mins = 0.0
-
+            first_train, initial_walk_mins = None, 0.0
             for step in route["itinerary"]:
                 if step["mode"] == "TRANSIT":
                     first_train = step
@@ -346,47 +358,88 @@ def run_competitive_simulation(itineraries: List[Dict], live_telemetry: Dict[str
                 if step["mode"] == "WALK":
                     initial_walk_mins += step["baseline_duration"]
 
-            # 2. Set the clock so the commuter leaves home with exactly a 5-minute buffer at the station
             if first_train and first_train.get("scheduled_departure"):
-                virtual_clock = first_train["scheduled_departure"] - timedelta(minutes=(5.0 + initial_walk_mins))
+                virtual_clock = first_train["scheduled_departure"] - timedelta(minutes=(1.0 + initial_walk_mins))
             else:
                 virtual_clock = datetime.now(timezone.utc)
-
+            
             sim_time = 0.0
-            missed_this_trial = False
-            early_transfer_this_trial = False
+            missed_this_trial, early_transfer_this_trial = False, False
             transit_leg_count = 0
-
+            
             for step in route["itinerary"]:
                 mode = step["mode"]
                 base = step["baseline_duration"]
 
-                if mode == "WALK":
-                    # If they walk slower than baseline, it will eat into their 5-min buffer!
-                    leg_duration = base * random.uniform(0.95, 1.20)
-                elif mode == "CITIBIKE":
+                if mode == "WALK": 
+                    leg_duration = base * random.uniform(0.95, 1.10)
+                elif mode == "CITIBIKE": 
                     leg_duration = base * random.uniform(0.90, 1.15)
-                else:
+                else: 
                     transit_leg_count += 1
-                    data = live_telemetry.get(step.get("line_id"), {"delay": 0.0, "has_alert": False})
-                    delay_penalty = data["delay"] + (np.random.gamma(3, 3) if data["has_alert"] else np.random.gamma(1.5, 2.0))
-                    leg_duration = base + delay_penalty
-
-                # Connection Logic: Compare Virtual Clock to Schedule
-                if mode == "TRANSIT" and step.get("scheduled_departure"):
-                    time_diff = (virtual_clock - step["scheduled_departure"]).total_seconds() / 60.0
-
-                    if time_diff > 0:
-                        # LATE
-                        missed_this_trial = True
-                        wait_penalty = random.uniform(MIN_HEADWAY, 15.0)
-                        leg_duration += wait_penalty
+                    
+                    dep_stop_name = step.get("departure_stop", "")
+                    arr_stop_name = step.get("arrival_stop", "")
+                    line_id = step.get("line_id", "")
+                    
+                    current_unix = virtual_clock.timestamp()
+                    
+                    dep_id = rt_engine.find_stop_id_by_name(dep_stop_name, line_id)
+                    arr_id = rt_engine.find_stop_id_by_name(arr_stop_name, line_id)
+                    direction = rt_engine.get_direction(dep_id, arr_id)
+                    gtfs_arrivals = rt_engine.fetch_live_arrivals(line_id, dep_id, direction)
+                    
+                    next_gtfs_arrival = None
+                    for arr_time in gtfs_arrivals:
+                        if arr_time >= current_unix:
+                            next_gtfs_arrival = arr_time
+                            break
+                            
+                    # Check alternatives if this is a transfer
+                    if transit_leg_count > 1:
+                        alternatives = find_alternatives(line_id, dep_stop_name, arr_stop_name)
+                        if alternatives:
+                            for alt_line in alternatives:
+                                alt_dep_id = rt_engine.find_stop_id_by_name(dep_stop_name, alt_line)
+                                alt_arr_id = rt_engine.find_stop_id_by_name(arr_stop_name, alt_line)
+                                alt_dir = rt_engine.get_direction(alt_dep_id, alt_arr_id)
+                                alt_arrivals = rt_engine.fetch_live_arrivals(alt_line, alt_dep_id, alt_dir)
+                                for arr_time in alt_arrivals:
+                                    if arr_time >= current_unix:
+                                        if not next_gtfs_arrival or arr_time < next_gtfs_arrival:
+                                            next_gtfs_arrival = arr_time
+                                        break
+                                        
+                    # Boarding logic
+                    if next_gtfs_arrival:
+                        wait_time_mins = (next_gtfs_arrival - current_unix) / 60.0
                     else:
-                        # EARLY
-                        early_wait_time = abs(time_diff)
-                        leg_duration += early_wait_time
-                        if transit_leg_count > 1:
+                        # Fallback to schedule generator if GTFS is empty
+                        current_hour = virtual_clock.hour
+                        if 6 <= current_hour < 10 or 15 <= current_hour < 20: tod = "peak"
+                        elif 10 <= current_hour < 15: tod = "midday"
+                        elif 20 <= current_hour < 24: tod = "evening"
+                        else: tod = "overnight"
+                        
+                        offset, delay, headway = get_trial_line_schedule(line_id, tod)
+                        import math
+                        k = math.ceil((sim_time - offset - delay) / headway)
+                        next_arrival_sim = offset + k * headway + delay
+                        wait_time_mins = next_arrival_sim - sim_time
+
+                    if wait_time_mins < 0: wait_time_mins = 0
+
+                    # Did we miss the scheduled transfer?
+                    if transit_leg_count > 1 and step.get("scheduled_departure"):
+                        sched_unix = step["scheduled_departure"].timestamp()
+                        if current_unix > sched_unix:
+                            missed_this_trial = True
+                        elif wait_time_mins == 0:
                             early_transfer_this_trial = True
+
+                    # Ride time variance
+                    ride_time = base * random.uniform(0.95, 1.05)
+                    leg_duration = wait_time_mins + ride_time
 
                 sim_time += leg_duration
                 virtual_clock += timedelta(minutes=leg_duration)
