@@ -355,11 +355,20 @@ def run_competitive_simulation(itineraries: List[Dict], live_telemetry: Dict[str
                     delay_penalty = data["delay"] + (np.random.gamma(3, 3) if data["has_alert"] else np.random.gamma(1.5, 2.0))
                     leg_duration = base + delay_penalty
 
+                # 2. Connection Logic: Compare Virtual Clock to Schedule
                 if mode == "TRANSIT" and step.get("scheduled_departure"):
-                    if virtual_clock > step["scheduled_departure"]:
+                    # Calculate difference in minutes
+                    time_diff = (virtual_clock - step["scheduled_departure"]).total_seconds() / 60.0
+
+                    if time_diff > 0:
+                        # LATE: We arrived at the platform after the train left
                         missed_this_trial = True
                         wait_penalty = random.uniform(MIN_HEADWAY, 15.0)
                         leg_duration += wait_penalty
+                    else:
+                        # EARLY: We made the connection, but we have to wait for departure
+                        early_wait_time = abs(time_diff)
+                        leg_duration += early_wait_time
 
                 sim_time += leg_duration
                 virtual_clock += timedelta(minutes=leg_duration)
