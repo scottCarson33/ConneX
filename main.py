@@ -199,6 +199,18 @@ def generate_route_explanation(itinerary: List[Dict]) -> str:
             transit_legs += 1
     return " -> ".join(steps) if steps else "Walking route only."
 
+def route_signature(itinerary: List[Dict]) -> str:
+    segments = []
+    for step in itinerary:
+        if step["mode"] == "TRANSIT":
+            label = str(step.get("line_display") or step.get("line_id") or "Transit")
+            for suffix in [" Train", " Bus", " Ferry", " Rail"]:
+                label = label.replace(suffix, "")
+            segments.append(label)
+        elif step["mode"] == "CITIBIKE":
+            segments.append("Citi Bike")
+    return " → ".join(segments) if segments else "Walk Only"
+
 def inject_citibike_alternative(base_itinerary: Dict) -> Optional[Dict]:
     steps = base_itinerary["itinerary"]
     rail_idx = -1
@@ -321,11 +333,11 @@ def fetch_google_itineraries(origin: str, destination: str) -> List[Dict]:
 def run_competitive_simulation(itineraries: List[Dict], live_telemetry: Dict[str, Dict], num_trials: int = 5000) -> Dict:
     win_counts = {r["route_index"]: 0 for r in itineraries}
     severe_delays = {r["route_index"]: 0 for r in itineraries}
-    missed_transfers = {r["route_index"]: 0 for r in itineraries}
-    early_transfers = {r["route_index"]: 0 for r in itineraries}
+    delayed_transfers = {r["route_index"]: 0 for r in itineraries}
+    early_arrivals = {r["route_index"]: 0 for r in itineraries}
     all_durations = {r["route_index"]: [] for r in itineraries} 
     
-    MIN_HEADWAY = 5.0
+    TRANSFER_DELAY_TOLERANCE_MINS = 2.0
 
     for _ in range(num_trials):
         trial_durations = {}
@@ -356,7 +368,7 @@ def run_competitive_simulation(itineraries: List[Dict], live_telemetry: Dict[str
                 virtual_clock = datetime.now(timezone.utc)
             
             sim_time = 0.0
-            missed_this_trial, early_transfer_this_trial = False, False
+            delayed_transfer_this_trial = False
             transit_leg_count = 0
             
             for step in route["itinerary"]:
@@ -421,13 +433,13 @@ def run_competitive_simulation(itineraries: List[Dict], live_telemetry: Dict[str
 
                     if wait_time_mins < 0: wait_time_mins = 0
 
-                    # Did we miss the scheduled transfer?
+                    # Did this transfer degrade versus the schedule Google expected?
                     if transit_leg_count > 1 and step.get("scheduled_departure"):
                         sched_unix = step["scheduled_departure"].timestamp()
-                        if current_unix > sched_unix:
-                            missed_this_trial = True
-                        elif wait_time_mins == 0:
-                            early_transfer_this_trial = True
+                        boarded_unix = current_unix + (wait_time_mins * 60.0)
+                        delay_mins = (boarded_unix - sched_unix) / 60.0
+                        if delay_mins > TRANSFER_DELAY_TOLERANCE_MINS:
+                            delayed_transfer_this_trial = True
 
                     # Ride time variance
                     ride_time = base * random.uniform(0.95, 1.05)
@@ -436,8 +448,8 @@ def run_competitive_simulation(itineraries: List[Dict], live_telemetry: Dict[str
                 sim_time += leg_duration
                 virtual_clock += timedelta(minutes=leg_duration)
 
-            if missed_this_trial: missed_transfers[route["route_index"]] += 1
-            if early_transfer_this_trial: early_transfers[route["route_index"]] += 1
+            if delayed_transfer_this_trial: delayed_transfers[route["route_index"]] += 1
+            if sim_time < route["baseline_mins"]: early_arrivals[route["route_index"]] += 1
             trial_durations[route["route_index"]] = sim_time
             all_durations[route["route_index"]].append(sim_time)
             if sim_time > (route["baseline_mins"] + 20.0): severe_delays[route["route_index"]] += 1
@@ -449,8 +461,9 @@ def run_competitive_simulation(itineraries: List[Dict], live_telemetry: Dict[str
         r["route_index"]: {
             "win_rate": round((win_counts[r["route_index"]] / num_trials) * 100, 1),
             "severe_risk": round((severe_delays[r["route_index"]] / num_trials) * 100, 1),
-            "miss_prob": round((missed_transfers[r["route_index"]] / num_trials) * 100, 1),
-            "early_prob": round((early_transfers[r["route_index"]] / num_trials) * 100, 1),
+            "transfer_delay_prob": round((delayed_transfers[r["route_index"]] / num_trials) * 100, 1),
+            "miss_prob": round((delayed_transfers[r["route_index"]] / num_trials) * 100, 1),
+            "early_prob": round((early_arrivals[r["route_index"]] / num_trials) * 100, 1),
             "exp_time": round(sum(all_durations[r["route_index"]]) / num_trials, 1),
             "best_time": round(min(all_durations[r["route_index"]]), 1),
             "worst_time": round(max(all_durations[r["route_index"]]), 1)
@@ -539,9 +552,7 @@ async def run_simulation(req: SimulationRequest):
             
             route_data["metrics"] = sim_results[route["route_index"]]
             
-            # Create a simple title for the route
-            route_str = " → ".join([s["line_id"] if s["line_id"] else "Transit" for s in route['itinerary'] if s["mode"] in ["TRANSIT", "CITIBIKE"]])
-            route_data["title"] = route_str if route_str else "Walk Only"
+            route_data["title"] = route_signature(route["itinerary"])
             
             payload.append(route_data)
 

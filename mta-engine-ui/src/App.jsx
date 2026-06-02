@@ -100,7 +100,7 @@ export default function App() {
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[300px] bg-orange-600/10 blur-[120px] rounded-full pointer-events-none z-0" />
 
       {/* TOP LIVE STATUS TICKER */}
-      <div className="relative z-10 w-full bg-[#0a0a0f] border-b border-white/5 py-2.5 overflow-hidden flex items-center shadow-lg shadow-black/50 overflow-x-auto touch-pan-x hide-scrollbar scroll-smooth">
+      <div className="relative z-10 w-full bg-[#0a0a0f] border-b border-white/5 py-2.5 overflow-hidden flex items-center shadow-lg shadow-black/50">
         <div className="absolute left-0 top-0 bottom-0 w-16 bg-gradient-to-r from-[#0a0a0f] to-transparent z-20 pointer-events-none" />
         <div className="absolute right-0 top-0 bottom-0 w-16 bg-gradient-to-l from-[#0a0a0f] to-transparent z-20 pointer-events-none" />
 
@@ -388,10 +388,18 @@ export default function App() {
                       </div>
                       <div className="flex justify-between items-center py-3 border-b border-white/5 group hover:bg-white/[0.02] px-2 rounded transition-colors">
                         <span className="text-xs text-slate-400 uppercase tracking-wider">
-                          Missed Transfer
+                          Transfer Delay
                         </span>
                         <span className="font-mono font-bold text-orange-400 drop-shadow-[0_0_5px_rgba(251,146,60,0.5)]">
-                          {activeRoute.metrics.miss_prob}%
+                          {activeRoute.metrics.transfer_delay_prob ?? activeRoute.metrics.miss_prob}%
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center py-3 border-b border-white/5 group hover:bg-white/[0.02] px-2 rounded transition-colors">
+                        <span className="text-xs text-slate-400 uppercase tracking-wider">
+                          Early Arrival
+                        </span>
+                        <span className="font-mono font-bold text-emerald-300">
+                          {activeRoute.metrics.early_prob}%
                         </span>
                       </div>
                       <div className="flex justify-between items-center py-3 border-b border-white/5 group hover:bg-white/[0.02] px-2 rounded transition-colors">
@@ -443,6 +451,9 @@ export default function App() {
                       <th className="py-4 px-6 font-semibold text-center">
                         Risk Factor
                       </th>
+                      <th className="py-4 px-6 font-semibold text-center">
+                        Early
+                      </th>
                       <th className="py-4 px-6 font-semibold text-right">
                         Cost
                       </th>
@@ -493,6 +504,9 @@ export default function App() {
                           >
                             {route.metrics.severe_risk}%
                           </span>
+                        </td>
+                        <td className="py-4 px-6 text-center font-mono text-emerald-300">
+                          {route.metrics.early_prob}%
                         </td>
                         <td className="py-4 px-6 text-right font-mono font-semibold text-slate-300">
                           ${route.cost.toFixed(2)}
