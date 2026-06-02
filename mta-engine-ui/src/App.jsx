@@ -7,7 +7,6 @@ import {
   Footprints,
   AlertTriangle,
   CheckCircle,
-  Clock,
 } from "lucide-react";
 
 export default function App() {
@@ -17,6 +16,9 @@ export default function App() {
   const [results, setResults] = useState([]);
   const [error, setError] = useState("");
 
+  // Resolves the live backend URL from Vite environment variables on Render, or falls back to localhost
+  const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+
   const handleSimulate = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -24,7 +26,7 @@ export default function App() {
     setResults([]);
 
     try {
-      const res = await fetch("http://localhost:8000/api/simulate", {
+      const res = await fetch(`${API_BASE_URL}/api/simulate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ origin, destination }),
