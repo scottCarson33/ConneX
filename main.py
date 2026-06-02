@@ -1,5 +1,7 @@
 import json
+import os
 import time
+from bisect import bisect_left
 import requests
 import numpy as np
 import random
@@ -13,8 +15,6 @@ from google.transit import gtfs_realtime_pb2
 
 from alternative_routes import find_alternatives, get_headway
 from realtime_engine import engine as rt_engine
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 
 try:
     from google.transit import gtfs_realtime_pb2
@@ -53,6 +53,9 @@ NYC_FERRY_FARE = 4.50
 STATEN_ISLAND_FERRY_FARE = 0.00
 CITIBIKE_UNLOCK = 4.79
 CITIBIKE_PER_MIN = 0.30
+DEFAULT_SIM_TRIALS = int(os.getenv("SIM_TRIALS", "2000"))
+SERVICE_STATUS_TTL_SECS = int(os.getenv("SERVICE_STATUS_TTL_SECS", "45"))
+SERVICE_STATUS_CACHE = {"time": 0.0, "payload": None}
 
 # --- FASTAPI SETUP ---
 app = FastAPI(title="MTA Stochastic Engine API")
@@ -60,7 +63,7 @@ app = FastAPI(title="MTA Stochastic Engine API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], # In production, lock this down to your React app's URL
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -70,6 +73,12 @@ class SimulationRequest(BaseModel):
     destination: str
 
 # --- ENGINE LOGIC ---
+def clean_line_id(line_id: str) -> str:
+    token = str(line_id or "").upper().strip().split()[0]
+    if token.startswith(("6", "7")):
+        return token[0]
+    return token
+
 def estimate_commuter_rail_fare(duration_mins: float) -> float:
     if duration_mins <= 30: return 7.00
     elif duration_mins <= 60: return 14.00
@@ -330,11 +339,49 @@ def fetch_google_itineraries(origin: str, destination: str) -> List[Dict]:
     return parsed
 
 # --- STOCHASTIC SIMULATION WITH BUTTERFLY EFFECT ---
-def run_competitive_simulation(itineraries: List[Dict], live_telemetry: Dict[str, Dict], num_trials: int = 5000) -> Dict:
+def build_live_arrival_cache(itineraries: List[Dict]) -> Dict[tuple, List[float]]:
+    arrival_cache = {}
+    for route in itineraries:
+        transit_leg_count = 0
+        for step_idx, step in enumerate(route["itinerary"]):
+            if step["mode"] != "TRANSIT":
+                continue
+
+            transit_leg_count += 1
+            dep_stop_name = step.get("departure_stop", "")
+            arr_stop_name = step.get("arrival_stop", "")
+            line_id = clean_line_id(step.get("line_id", ""))
+            lines = [line_id]
+
+            if transit_leg_count > 1:
+                lines = find_alternatives(line_id, dep_stop_name, arr_stop_name) or lines
+
+            arrivals = []
+            for candidate_line in lines:
+                dep_id = rt_engine.find_stop_id_by_name(dep_stop_name, candidate_line)
+                arr_id = rt_engine.find_stop_id_by_name(arr_stop_name, candidate_line)
+                direction = rt_engine.get_direction(dep_id, arr_id)
+                arrivals.extend(rt_engine.fetch_live_arrivals(candidate_line, dep_id, direction))
+
+            arrival_cache[(route["route_index"], step_idx)] = sorted(set(arrivals))
+
+    return arrival_cache
+
+def next_cached_arrival(arrivals: List[float], current_unix: float) -> Optional[float]:
+    if not arrivals:
+        return None
+    idx = bisect_left(arrivals, current_unix)
+    return arrivals[idx] if idx < len(arrivals) else None
+
+def run_competitive_simulation(
+    itineraries: List[Dict],
+    live_telemetry: Dict[str, Dict],
+    num_trials: int = DEFAULT_SIM_TRIALS,
+    live_arrival_cache: Optional[Dict[tuple, List[float]]] = None,
+) -> Dict:
     win_counts = {r["route_index"]: 0 for r in itineraries}
     severe_delays = {r["route_index"]: 0 for r in itineraries}
     delayed_transfers = {r["route_index"]: 0 for r in itineraries}
-    early_arrivals = {r["route_index"]: 0 for r in itineraries}
     all_durations = {r["route_index"]: [] for r in itineraries} 
     
     TRANSFER_DELAY_TOLERANCE_MINS = 2.0
@@ -371,7 +418,7 @@ def run_competitive_simulation(itineraries: List[Dict], live_telemetry: Dict[str
             delayed_transfer_this_trial = False
             transit_leg_count = 0
             
-            for step in route["itinerary"]:
+            for step_idx, step in enumerate(route["itinerary"]):
                 mode = step["mode"]
                 base = step["baseline_duration"]
 
@@ -384,35 +431,18 @@ def run_competitive_simulation(itineraries: List[Dict], live_telemetry: Dict[str
                     
                     dep_stop_name = step.get("departure_stop", "")
                     arr_stop_name = step.get("arrival_stop", "")
-                    line_id = step.get("line_id", "")
+                    line_id = clean_line_id(step.get("line_id", ""))
                     
                     current_unix = virtual_clock.timestamp()
-                    
-                    dep_id = rt_engine.find_stop_id_by_name(dep_stop_name, line_id)
-                    arr_id = rt_engine.find_stop_id_by_name(arr_stop_name, line_id)
-                    direction = rt_engine.get_direction(dep_id, arr_id)
-                    gtfs_arrivals = rt_engine.fetch_live_arrivals(line_id, dep_id, direction)
-                    
-                    next_gtfs_arrival = None
-                    for arr_time in gtfs_arrivals:
-                        if arr_time >= current_unix:
-                            next_gtfs_arrival = arr_time
-                            break
-                            
-                    # Check alternatives if this is a transfer
-                    if transit_leg_count > 1:
-                        alternatives = find_alternatives(line_id, dep_stop_name, arr_stop_name)
-                        if alternatives:
-                            for alt_line in alternatives:
-                                alt_dep_id = rt_engine.find_stop_id_by_name(dep_stop_name, alt_line)
-                                alt_arr_id = rt_engine.find_stop_id_by_name(arr_stop_name, alt_line)
-                                alt_dir = rt_engine.get_direction(alt_dep_id, alt_arr_id)
-                                alt_arrivals = rt_engine.fetch_live_arrivals(alt_line, alt_dep_id, alt_dir)
-                                for arr_time in alt_arrivals:
-                                    if arr_time >= current_unix:
-                                        if not next_gtfs_arrival or arr_time < next_gtfs_arrival:
-                                            next_gtfs_arrival = arr_time
-                                        break
+
+                    if live_arrival_cache is not None:
+                        next_gtfs_arrival = next_cached_arrival(live_arrival_cache.get((route["route_index"], step_idx), []), current_unix)
+                    else:
+                        dep_id = rt_engine.find_stop_id_by_name(dep_stop_name, line_id)
+                        arr_id = rt_engine.find_stop_id_by_name(arr_stop_name, line_id)
+                        direction = rt_engine.get_direction(dep_id, arr_id)
+                        gtfs_arrivals = rt_engine.fetch_live_arrivals(line_id, dep_id, direction)
+                        next_gtfs_arrival = next_cached_arrival(gtfs_arrivals, current_unix)
                                         
                     # Boarding logic
                     if next_gtfs_arrival:
@@ -449,7 +479,6 @@ def run_competitive_simulation(itineraries: List[Dict], live_telemetry: Dict[str
                 virtual_clock += timedelta(minutes=leg_duration)
 
             if delayed_transfer_this_trial: delayed_transfers[route["route_index"]] += 1
-            if sim_time < route["baseline_mins"]: early_arrivals[route["route_index"]] += 1
             trial_durations[route["route_index"]] = sim_time
             all_durations[route["route_index"]].append(sim_time)
             if sim_time > (route["baseline_mins"] + 20.0): severe_delays[route["route_index"]] += 1
@@ -457,22 +486,35 @@ def run_competitive_simulation(itineraries: List[Dict], live_telemetry: Dict[str
         winner = min(trial_durations, key=trial_durations.get)
         win_counts[winner] += 1
 
-    return {
-        r["route_index"]: {
+    results = {}
+    for r in itineraries:
+        route_index = r["route_index"]
+        durations = all_durations[route_index]
+        expected_time = r["baseline_mins"]
+        early_count = sum(1 for duration in durations if duration < expected_time)
+        results[route_index] = {
             "win_rate": round((win_counts[r["route_index"]] / num_trials) * 100, 1),
-            "severe_risk": round((severe_delays[r["route_index"]] / num_trials) * 100, 1),
-            "transfer_delay_prob": round((delayed_transfers[r["route_index"]] / num_trials) * 100, 1),
-            "miss_prob": round((delayed_transfers[r["route_index"]] / num_trials) * 100, 1),
-            "early_prob": round((early_arrivals[r["route_index"]] / num_trials) * 100, 1),
-            "exp_time": round(sum(all_durations[r["route_index"]]) / num_trials, 1),
-            "best_time": round(min(all_durations[r["route_index"]]), 1),
-            "worst_time": round(max(all_durations[r["route_index"]]), 1)
-        } for r in itineraries
-    }
+            "severe_risk": round((severe_delays[route_index] / num_trials) * 100, 1),
+            "transfer_delay_prob": round((delayed_transfers[route_index] / num_trials) * 100, 1),
+            "miss_prob": round((delayed_transfers[route_index] / num_trials) * 100, 1),
+            "early_prob": round((early_count / num_trials) * 100, 1),
+            "exp_time": round(sum(durations) / num_trials, 1),
+            "best_time": round(min(durations), 1),
+            "worst_time": round(max(durations), 1)
+        }
+    return results
 
 # --- API ENDPOINTS ---
+@app.get("/api/health")
+def health_check():
+    return {"status": "ok"}
+
 @app.get("/api/service-status")
-async def get_service_status():
+def get_service_status():
+    cache_age = time.time() - SERVICE_STATUS_CACHE["time"]
+    if SERVICE_STATUS_CACHE["payload"] and cache_age < SERVICE_STATUS_TTL_SECS:
+        return SERVICE_STATUS_CACHE["payload"]
+
     all_lines = ["1", "2", "3", "4", "5", "6", "7", "A", "C", "E", "B", "D", "F", "M", "N", "Q", "R", "W", "L", "G", "J", "Z", "LIRR", "MNR"]
     line_statuses = {line: {"status": "Good Service", "detail": "", "severity": "normal"} for line in all_lines}
     line_statuses["LIRR"]["status"] = "On/Close to Schedule"
@@ -517,10 +559,13 @@ async def get_service_status():
             for l in grp:
                 status_list.append({"line_group": l, **line_statuses[l]})
 
-    return {"status": "success", "data": status_list}
+    payload = {"status": "success", "data": status_list}
+    SERVICE_STATUS_CACHE["time"] = time.time()
+    SERVICE_STATUS_CACHE["payload"] = payload
+    return payload
 
 @app.post("/api/simulate")
-async def run_simulation(req: SimulationRequest):
+def run_simulation(req: SimulationRequest):
     try:
         itineraries = fetch_google_itineraries(req.origin, req.destination)
         if not itineraries: raise HTTPException(status_code=400, detail="No routes found")
@@ -530,16 +575,16 @@ async def run_simulation(req: SimulationRequest):
             for s in route["itinerary"]:
                 if s["mode"] == "TRANSIT":
                     lid = s["line_id"]
-                    clean_str = str(lid).split()[0] if lid else ""
-                    clean = clean_str[0] if (clean_str.startswith('7') or clean_str.startswith('6')) else clean_str
+                    clean = clean_line_id(lid)
                     f_key = get_transit_feed_type(clean, s["is_bus"], s["line_name"])
 
-                    if lid not in live_telemetry:
+                    if clean not in live_telemetry:
                         delay = fetch_live_delay(clean, f_key)
                         alert = check_for_alerts(clean)
-                        live_telemetry[lid] = {"delay": delay, "has_alert": alert}
+                        live_telemetry[clean] = {"delay": delay, "has_alert": alert}
         
-        sim_results = run_competitive_simulation(itineraries, live_telemetry)
+        live_arrival_cache = build_live_arrival_cache(itineraries)
+        sim_results = run_competitive_simulation(itineraries, live_telemetry, live_arrival_cache=live_arrival_cache)
         
         # Combine data for frontend
         payload = []

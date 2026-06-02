@@ -163,7 +163,7 @@ export default function App() {
               className="text-sm text-slate-400 mt-4 font-mono max-w-xl animate-fade"
               style={{ animationDelay: "0.2s" }}
             >
-              <span className="text-white">5,000-trial Monte Carlo</span> • Live
+              <span className="text-white">Monte Carlo routing</span> • Live
               MTA telemetry active • Butterfly-effect transfer modeling
             </p>
           </div>
@@ -396,7 +396,7 @@ export default function App() {
                       </div>
                       <div className="flex justify-between items-center py-3 border-b border-white/5 group hover:bg-white/[0.02] px-2 rounded transition-colors">
                         <span className="text-xs text-slate-400 uppercase tracking-wider">
-                          Early Arrival
+                          Beats Expected
                         </span>
                         <span className="font-mono font-bold text-emerald-300">
                           {activeRoute.metrics.early_prob}%
@@ -452,7 +452,7 @@ export default function App() {
                         Risk Factor
                       </th>
                       <th className="py-4 px-6 font-semibold text-center">
-                        Early
+                        Beats Exp.
                       </th>
                       <th className="py-4 px-6 font-semibold text-right">
                         Cost
