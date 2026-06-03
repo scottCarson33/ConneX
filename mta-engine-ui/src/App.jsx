@@ -318,6 +318,35 @@ export default function App() {
                     <h3 className="text-3xl font-black text-white tracking-tight mb-2 drop-shadow-md">
                       {activeRoute.title}
                     </h3>
+                    <p className="text-sm font-mono text-slate-400 bg-white/[0.02] p-3 rounded-lg border border-white/5 mt-3 leading-relaxed">
+                      {activeRoute.explanation}
+                    </p>
+                  </div>
+
+                  {/* EXACT TIMESTAMP INJECTIONS IN UI TIMELINE HEADER */}
+                  <div className="mb-6 flex flex-col md:flex-row items-center gap-4 bg-gradient-to-r from-orange-500/10 to-emerald-500/10 p-5 rounded-xl border border-white/10">
+                    <div className="flex-1 flex items-center gap-4 border-r border-white/10 pr-4">
+                      <Clock className="w-6 h-6 text-orange-500" />
+                      <div>
+                        <span className="text-[10px] uppercase tracking-widest text-slate-500 font-mono block">
+                          First Train Departure
+                        </span>
+                        <span className="font-bold text-white font-mono text-lg">
+                          {activeRoute.metrics.first_train_time}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex-1 flex items-center justify-end gap-4 pl-4">
+                      <div className="text-right">
+                        <span className="text-[10px] uppercase tracking-widest text-slate-500 font-mono block">
+                          Est. Final Arrival
+                        </span>
+                        <span className="font-bold text-emerald-400 font-mono text-lg">
+                          {activeRoute.metrics.est_arrival_time}
+                        </span>
+                      </div>
+                      <CheckCircle className="w-6 h-6 text-emerald-500" />
+                    </div>
                   </div>
 
                   <div className="relative border-l-2 border-[#1f202e] ml-4 space-y-6">

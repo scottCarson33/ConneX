@@ -421,7 +421,6 @@ def run_competitive_simulation(
             return trial_line_offsets[line], trial_line_delays[line], get_headway(line, tod) or 10.0
 
         for route in itineraries:
-            # We seed the simulation clock strictly with the provided start time.
             virtual_clock = sim_start_time
             sim_time = 0.0
             delayed_transfer_this_trial = False
@@ -492,6 +491,9 @@ def run_competitive_simulation(
         win_counts[winner] += 1
 
     results = {}
+    est_offset = timedelta(hours=-4)
+    local_start_time = sim_start_time + est_offset
+
     for r in itineraries:
         route_index = r["route_index"]
         durations = np.array(all_durations[route_index])
@@ -502,6 +504,17 @@ def run_competitive_simulation(
         p25 = np.percentile(durations, 25)
         p75 = np.percentile(durations, 75)
         iqr_time = float(p75 - p25)
+
+        # Calculate exactly when the first train is boarded
+        walk_mins_before_transit = 0.0
+        for step in r["itinerary"]:
+            if step["mode"] != "TRANSIT":
+                walk_mins_before_transit += step["baseline_duration"]
+            else:
+                break
+
+        first_train_dt = local_start_time + timedelta(minutes=walk_mins_before_transit)
+        arr_dt = local_start_time + timedelta(minutes=mean_time)
 
         results[route_index] = {
             "win_rate": round((win_counts[r["route_index"]] / num_trials) * 100, 1),
@@ -514,14 +527,15 @@ def run_competitive_simulation(
             "best_time": round(float(np.min(durations)), 1),
             "worst_time": round(float(np.max(durations)), 1),
             "p25_mins": round(float(p25), 1),
-            "p75_mins": round(float(p75), 1)
+            "p75_mins": round(float(p75), 1),
+            "first_train_time": first_train_dt.strftime("%I:%M %p"),
+            "est_arrival_time": arr_dt.strftime("%I:%M %p")
         }
     return results
 
 @app.post("/api/simulate")
 def run_simulation(req: SimulationRequest):
     try:
-        # Calculate target departure based on UTC now + user offset minutes
         sim_start_time = datetime.now(timezone.utc) + timedelta(minutes=req.offset_mins)
 
         est_offset = timedelta(hours=-4)
@@ -559,8 +573,14 @@ def run_simulation(req: SimulationRequest):
                 if step.get("scheduled_departure") and isinstance(step["scheduled_departure"], datetime):
                     step["scheduled_departure"] = step["scheduled_departure"].isoformat()
 
-            route_data["metrics"] = sim_results[route["route_index"]]
+            m = sim_results[route["route_index"]]
+            route_data["metrics"] = m
             route_data["title"] = route_signature(route["itinerary"])
+
+            # Rewrite explanation to include explicit train and arrival times
+            base_exp = route_data.get("explanation", "")
+            route_data["explanation"] = f"{base_exp} | Departs ~{m['first_train_time']}. Arrives ~{m['est_arrival_time']}."
+
             payload.append(route_data)
 
         return {
