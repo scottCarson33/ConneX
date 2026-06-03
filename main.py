@@ -538,4 +538,86 @@ def run_competitive_simulation(
             "p90_mins": round(p90_time, 1),
             "iqr_mins": round(iqr_time, 1),
             "best_time": round(float(np.min(durations)), 1),
-            "worst_time": round(float(np.max(durations)),
+            "worst_time": round(float(np.max(durations)), 1),
+            "p25_mins": round(float(p25), 1),
+            "p75_mins": round(float(p75), 1),
+            "step_metrics": step_metrics,
+            "est_arrival_time": arr_dt.strftime("%I:%M %p")
+        }
+    return results
+
+@app.post("/api/simulate")
+def run_simulation(req: SimulationRequest):
+    try:
+        # Immediate departure
+        sim_start_time = datetime.now(timezone.utc)
+        est_offset = timedelta(hours=-4)
+        local_start_time = sim_start_time + est_offset
+        execution_start_str = local_start_time.strftime("%A, %B %d %Y at %I:%M %p")
+
+        itineraries = fetch_google_itineraries(req.origin, req.destination, sim_start_time)
+        if not itineraries: raise HTTPException(status_code=400, detail="No routes found")
+
+        live_telemetry = {}
+        for route in itineraries:
+            for s in route["itinerary"]:
+                if s["mode"] == "TRANSIT":
+                    lid = s["line_id"]
+                    clean = clean_line_id(lid)
+                    f_key = get_transit_feed_type(clean, s["is_bus"], s["line_name"])
+
+                    if clean not in live_telemetry:
+                        delay = fetch_live_delay(clean, f_key)
+                        alert = check_for_alerts(clean)
+                        live_telemetry[clean] = {"delay": delay, "has_alert": alert}
+
+        live_arrival_cache = build_live_arrival_cache(itineraries)
+        sim_results = run_competitive_simulation(
+            itineraries,
+            live_telemetry,
+            sim_start_time,
+            live_arrival_cache=live_arrival_cache
+        )
+
+        payload = []
+        for route in itineraries:
+            route_data = route.copy()
+            m = sim_results[route["route_index"]]
+
+            # Inject Board Times and Wait Times natively into the frontend steps
+            for step_idx, step in enumerate(route_data["itinerary"]):
+                sm = m["step_metrics"].get(step_idx, {})
+                step["expected_board_time"] = sm.get("board_time", "")
+                step["expected_wait_mins"] = sm.get("wait_mins", 0.0)
+
+                if step.get("scheduled_departure") and isinstance(step["scheduled_departure"], datetime):
+                    step["scheduled_departure"] = step["scheduled_departure"].isoformat()
+
+            # Inject explicit Arrival block at the end of the route
+            route_data["itinerary"].append({
+                "mode": "ARRIVE",
+                "baseline_duration": 0,
+                "line_display": "Destination Reached",
+                "departure_stop": "N/A",
+                "arrival_stop": req.destination,
+                "expected_board_time": m["est_arrival_time"],
+                "expected_wait_mins": 0
+            })
+
+            route_data["metrics"] = m
+            route_data["title"] = route_signature(route["itinerary"])
+            payload.append(route_data)
+
+        return {
+            "status": "success",
+            "run_start_time": execution_start_str,
+            "data": payload
+        }
+
+    except Exception as e:
+        logger.error(f"Error during simulation: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
