@@ -57,8 +57,6 @@ CITIBIKE_UNLOCK_DOCK_TIME = 2.0
 CITIBIKE_WALK_TO_DESTINATION = 4.0
 
 DEFAULT_SIM_TRIALS = int(os.getenv("SIM_TRIALS", "2000"))
-SERVICE_STATUS_TTL_SECS = int(os.getenv("SERVICE_STATUS_TTL_SECS", "45"))
-SERVICE_STATUS_CACHE = {"time": 0.0, "payload": None}
 
 app = FastAPI(title="MTA Stochastic Engine API")
 
@@ -73,7 +71,6 @@ app.add_middleware(
 class SimulationRequest(BaseModel):
     origin: str
     destination: str
-    offset_mins: int = Field(default=0, ge=0)
 
 def clean_line_id(line_id: str) -> str:
     token = str(line_id or "").upper().strip().split()[0]
@@ -196,20 +193,6 @@ def parse_iso_time(time_str: str) -> Optional[datetime]:
     try: return datetime.fromisoformat(time_str.replace("Z", "+00:00"))
     except: return None
 
-def generate_route_explanation(itinerary: List[Dict]) -> str:
-    steps = []
-    for step in itinerary:
-        mode = step["mode"]
-        if mode == "WALK":
-            steps.append(f"Walk ({round(step['baseline_duration'], 1)} mins) to {step['arrival_stop']}")
-        elif mode == "CITIBIKE":
-            steps.append(f"Cycle Citi Bike ({round(step['baseline_duration'], 1)} mins) to {step['arrival_stop']}")
-        elif mode == "DOCKING_OVERHEAD":
-            steps.append("Lock bike & handle dock confirmation overhead")
-        elif mode == "TRANSIT":
-            steps.append(f"Board {step['line_display']} at {step['departure_stop']} to {step['arrival_stop']}")
-    return " -> ".join(steps) if steps else "Walking route only."
-
 def route_signature(itinerary: List[Dict]) -> str:
     segments = []
     for step in itinerary:
@@ -223,7 +206,7 @@ def route_signature(itinerary: List[Dict]) -> str:
             segments.append("Citi Bike")
     return " → ".join(segments) if segments else "Walk Only"
 
-def inject_citibike_alternative(base_itinerary: Dict) -> Optional[Dict]:
+def inject_citibike_alternative(base_itinerary: Dict, destination: str) -> Optional[Dict]:
     steps = base_itinerary["itinerary"]
     rail_idx = -1
     for idx, step in enumerate(steps):
@@ -252,18 +235,17 @@ def inject_citibike_alternative(base_itinerary: Dict) -> Optional[Dict]:
         if cycling_duration > 120.0 or cycling_duration == 0: return None
 
         new_steps = [
-            {"mode": "WALK", "baseline_duration": CITIBIKE_WALK_TO_STATION, "line_id": "Walk", "departure_stop": "Origin", "arrival_stop": "Nearest Citi Bike Station", "line_display": "Walk to Origin Dock"},
+            {"mode": "WALK", "baseline_duration": CITIBIKE_WALK_TO_STATION, "line_id": "Walk", "departure_stop": "Origin Location", "arrival_stop": "Nearest Citi Bike Station", "line_display": "Walk to Origin Dock"},
             {"mode": "CITIBIKE", "baseline_duration": cycling_duration, "line_id": "Citi Bike", "departure_stop": "Nearest Citi Bike Station", "arrival_stop": "Destination Docking Station", "line_display": "Citi Bike Ride"},
             {"mode": "DOCKING_OVERHEAD", "baseline_duration": CITIBIKE_UNLOCK_DOCK_TIME, "line_id": "Docking Overhead", "departure_stop": "Destination Docking Station", "arrival_stop": "Destination Docking Station", "line_display": "Dock Bike"},
-            {"mode": "WALK", "baseline_duration": CITIBIKE_WALK_TO_DESTINATION, "line_id": "Walk", "departure_stop": "Destination Docking Station", "arrival_stop": "Destination", "line_display": "Walk to Destination"}
+            {"mode": "WALK", "baseline_duration": CITIBIKE_WALK_TO_DESTINATION, "line_id": "Walk", "departure_stop": "Destination Docking Station", "arrival_stop": destination, "line_display": f"Walk to {destination}"}
         ]
 
     return {
         "route_index": 4,
         "baseline_mins": sum(s["baseline_duration"] for s in new_steps),
         "itinerary": new_steps,
-        "cost": calculate_itinerary_fare(new_steps),
-        "explanation": generate_route_explanation(new_steps)
+        "cost": calculate_itinerary_fare(new_steps)
     }
 
 def fetch_google_itineraries(origin: str, destination: str, target_time: datetime) -> List[Dict]:
@@ -298,44 +280,57 @@ def fetch_google_itineraries(origin: str, destination: str, target_time: datetim
             api_fare = float(fare_details.get("units", "0")) + (float(fare_details.get("nanos", "0")) / 1e9)
 
         raw_steps = []
-        for leg in route.get("legs", []):
-            for step in leg.get("steps", []):
-                mode = step.get("travelMode", "WALK")
-                dur = parse_v2_duration(step.get("staticDuration", "0s"))
-                line_id, is_bus, is_ferry, is_commuter_rail, line_name, dep_stop, arr_stop, sched_dep = None, False, False, False, "", "N/A", "N/A", None
+        steps_list = [s for leg in route.get("legs", []) for s in leg.get("steps", [])]
 
-                if mode in ["TRANSIT", "FERRY"]:
-                    details = step.get("transitDetails", {})
-                    t_line = details.get("transitLine", {})
-                    v_type = t_line.get("vehicle", {}).get("type", "")
-                    stop_details = details.get("stopDetails", {})
+        for i, step in enumerate(steps_list):
+            mode = step.get("travelMode", "WALK")
+            dur = parse_v2_duration(step.get("staticDuration", "0s"))
 
-                    line_id = t_line.get("nameShort")
-                    line_name = t_line.get("name", "")
-                    is_bus = (v_type == "BUS")
-                    is_ferry = (v_type == "FERRY" or mode == "FERRY")
-                    is_commuter_rail = (v_type == "COMMUTER_TRAIN" or any(rn in line_name.upper() for rn in ["LIRR", "LONG ISLAND", "METRO-NORTH", "HUDSON", "HARLEM", "NEW HAVEN"]))
-                    mode = "TRANSIT"
-                    dep_stop = stop_details.get("departureStop", {}).get("name", "Unknown Station")
-                    arr_stop = stop_details.get("arrivalStop", {}).get("name", "Unknown Station")
+            if mode == "WALK":
+                # Intelligently define the walking instruction based on the next step
+                next_stop = destination
+                for next_step in steps_list[i+1:]:
+                    if next_step.get("travelMode") in ["TRANSIT", "FERRY"]:
+                        next_stop = next_step.get("transitDetails", {}).get("stopDetails", {}).get("departureStop", {}).get("name", "Station")
+                        break
 
-                    dep_time_str = stop_details.get("departureTime")
-                    if dep_time_str: sched_dep = parse_iso_time(dep_time_str)
+                raw_steps.append({
+                    "mode": "WALK", "baseline_duration": dur, "line_id": "Walk",
+                    "is_bus": False, "is_ferry": False, "is_commuter_rail": False,
+                    "line_name": "Walk", "departure_stop": "N/A", "arrival_stop": "N/A",
+                    "line_display": f"Walk to {next_stop}",
+                    "scheduled_departure": None
+                })
+
+            elif mode in ["TRANSIT", "FERRY"]:
+                details = step.get("transitDetails", {})
+                t_line = details.get("transitLine", {})
+                v_type = t_line.get("vehicle", {}).get("type", "")
+                stop_details = details.get("stopDetails", {})
+
+                line_id = t_line.get("nameShort")
+                line_name = t_line.get("name", "")
+                is_bus = (v_type == "BUS")
+                is_ferry = (v_type == "FERRY" or mode == "FERRY")
+                is_commuter_rail = (v_type == "COMMUTER_TRAIN" or any(rn in line_name.upper() for rn in ["LIRR", "LONG ISLAND", "METRO-NORTH", "HUDSON", "HARLEM", "NEW HAVEN"]))
+
+                dep_stop = stop_details.get("departureStop", {}).get("name", "Unknown Station")
+                arr_stop = stop_details.get("arrivalStop", {}).get("name", "Unknown Station")
+
+                dep_time_str = stop_details.get("departureTime")
+                sched_dep = parse_iso_time(dep_time_str) if dep_time_str else None
 
                 line_id_val = line_id if line_id else line_name
                 display_type = "Bus" if is_bus else "Ferry" if is_ferry else "Rail" if is_commuter_rail else "Train"
 
                 alt_list = []
-                if mode == "TRANSIT" and not is_bus and not is_ferry and not is_commuter_rail:
+                if not is_bus and not is_ferry and not is_commuter_rail:
                     alt_list = find_alternatives(line_id_val, dep_stop, arr_stop)
 
-                if alt_list and len(alt_list) > 1:
-                    line_display = f"{'/'.join(alt_list)} {display_type}"
-                else:
-                    line_display = f"{line_id_val} {display_type}"
+                line_display = f"{'/'.join(alt_list)} {display_type}" if alt_list and len(alt_list) > 1 else f"{line_id_val} {display_type}"
 
                 raw_steps.append({
-                    "mode": mode, "baseline_duration": dur, "line_id": line_id_val,
+                    "mode": "TRANSIT", "baseline_duration": dur, "line_id": line_id_val,
                     "is_bus": is_bus, "is_ferry": is_ferry, "is_commuter_rail": is_commuter_rail,
                     "line_name": line_name, "departure_stop": dep_stop, "arrival_stop": arr_stop,
                     "line_display": line_display,
@@ -344,11 +339,11 @@ def fetch_google_itineraries(origin: str, destination: str, target_time: datetim
 
         parsed.append({
             "route_index": idx, "baseline_mins": total_dur, "itinerary": raw_steps,
-            "cost": calculate_itinerary_fare(raw_steps, api_fare), "explanation": generate_route_explanation(raw_steps)
+            "cost": calculate_itinerary_fare(raw_steps, api_fare)
         })
 
     if parsed:
-        bike_alt = inject_citibike_alternative(parsed[0])
+        bike_alt = inject_citibike_alternative(parsed[0], destination)
         if bike_alt: parsed.append(bike_alt)
 
     return parsed
@@ -382,15 +377,13 @@ def build_live_arrival_cache(itineraries: List[Dict]) -> Dict[tuple, List[float]
     return arrival_cache
 
 def next_cached_arrival(arrivals: List[float], current_unix: float) -> Optional[float]:
-    if not arrivals:
-        return None
+    if not arrivals: return None
     idx = bisect_left(arrivals, current_unix)
     return arrivals[idx] if idx < len(arrivals) else None
 
 def get_nyc_hour(dt: datetime) -> int:
     est_offset = timedelta(hours=-4)
-    nyc_dt = dt + est_offset
-    return nyc_dt.hour
+    return (dt + est_offset).hour
 
 def run_competitive_simulation(
     itineraries: List[Dict],
@@ -402,7 +395,9 @@ def run_competitive_simulation(
     win_counts = {r["route_index"]: 0 for r in itineraries}
     severe_delays = {r["route_index"]: 0 for r in itineraries}
     delayed_transfers = {r["route_index"]: 0 for r in itineraries}
+
     all_durations = {r["route_index"]: [] for r in itineraries}
+    step_stats = {r["route_index"]: {i: {"board_unix": [], "wait_mins": []} for i in range(len(r["itinerary"]))} for r in itineraries}
 
     TRANSFER_DELAY_TOLERANCE_MINS = 2.0
 
@@ -429,20 +424,28 @@ def run_competitive_simulation(
             for step_idx, step in enumerate(route["itinerary"]):
                 mode = step["mode"]
                 base = step["baseline_duration"]
+                current_unix = virtual_clock.timestamp()
 
                 if mode == "WALK":
                     leg_duration = base * random.uniform(0.92, 1.12)
+                    step_stats[route["route_index"]][step_idx]["board_unix"].append(current_unix)
+                    step_stats[route["route_index"]][step_idx]["wait_mins"].append(0.0)
+
                 elif mode == "CITIBIKE":
                     leg_duration = base * random.uniform(0.85, 1.20)
+                    step_stats[route["route_index"]][step_idx]["board_unix"].append(current_unix)
+                    step_stats[route["route_index"]][step_idx]["wait_mins"].append(0.0)
+
                 elif mode == "DOCKING_OVERHEAD":
                     leg_duration = base * random.uniform(0.75, 1.50)
+                    step_stats[route["route_index"]][step_idx]["board_unix"].append(current_unix)
+                    step_stats[route["route_index"]][step_idx]["wait_mins"].append(0.0)
+
                 else:
                     transit_leg_count += 1
                     dep_stop_name = step.get("departure_stop", "")
                     arr_stop_name = step.get("arrival_stop", "")
                     line_id = clean_line_id(step.get("line_id", ""))
-
-                    current_unix = virtual_clock.timestamp()
 
                     if live_arrival_cache is not None:
                         next_gtfs_arrival = next_cached_arrival(live_arrival_cache.get((route["route_index"], step_idx), []), current_unix)
@@ -479,6 +482,11 @@ def run_competitive_simulation(
                     ride_time = base * random.uniform(0.95, 1.05)
                     leg_duration = wait_time_mins + ride_time
 
+                    # Store exact board/wait times for the frontend UI
+                    board_unix = current_unix + (wait_time_mins * 60.0)
+                    step_stats[route["route_index"]][step_idx]["board_unix"].append(board_unix)
+                    step_stats[route["route_index"]][step_idx]["wait_mins"].append(wait_time_mins)
+
                 sim_time += leg_duration
                 virtual_clock += timedelta(minutes=leg_duration)
 
@@ -505,16 +513,21 @@ def run_competitive_simulation(
         p75 = np.percentile(durations, 75)
         iqr_time = float(p75 - p25)
 
-        # Calculate exactly when the first train is boarded
-        walk_mins_before_transit = 0.0
-        for step in r["itinerary"]:
-            if step["mode"] != "TRANSIT":
-                walk_mins_before_transit += step["baseline_duration"]
-            else:
-                break
-
-        first_train_dt = local_start_time + timedelta(minutes=walk_mins_before_transit)
         arr_dt = local_start_time + timedelta(minutes=mean_time)
+
+        # Calculate expected step-level timings
+        step_metrics = {}
+        for step_idx in step_stats[route_index]:
+            b_unix = step_stats[route_index][step_idx]["board_unix"]
+            w_mins = step_stats[route_index][step_idx]["wait_mins"]
+            avg_board = np.mean(b_unix) if b_unix else 0
+            avg_wait = np.mean(w_mins) if w_mins else 0
+
+            dt_board = datetime.fromtimestamp(avg_board, tz=timezone.utc) + est_offset
+            step_metrics[step_idx] = {
+                "board_time": dt_board.strftime("%I:%M %p"),
+                "wait_mins": round(avg_wait, 1)
+            }
 
         results[route_index] = {
             "win_rate": round((win_counts[r["route_index"]] / num_trials) * 100, 1),
@@ -525,74 +538,4 @@ def run_competitive_simulation(
             "p90_mins": round(p90_time, 1),
             "iqr_mins": round(iqr_time, 1),
             "best_time": round(float(np.min(durations)), 1),
-            "worst_time": round(float(np.max(durations)), 1),
-            "p25_mins": round(float(p25), 1),
-            "p75_mins": round(float(p75), 1),
-            "first_train_time": first_train_dt.strftime("%I:%M %p"),
-            "est_arrival_time": arr_dt.strftime("%I:%M %p")
-        }
-    return results
-
-@app.post("/api/simulate")
-def run_simulation(req: SimulationRequest):
-    try:
-        sim_start_time = datetime.now(timezone.utc) + timedelta(minutes=req.offset_mins)
-
-        est_offset = timedelta(hours=-4)
-        local_start_time = sim_start_time + est_offset
-        execution_start_str = local_start_time.strftime("%A, %B %d %Y at %I:%M %p")
-
-        itineraries = fetch_google_itineraries(req.origin, req.destination, sim_start_time)
-        if not itineraries: raise HTTPException(status_code=400, detail="No routes found")
-
-        live_telemetry = {}
-        for route in itineraries:
-            for s in route["itinerary"]:
-                if s["mode"] == "TRANSIT":
-                    lid = s["line_id"]
-                    clean = clean_line_id(lid)
-                    f_key = get_transit_feed_type(clean, s["is_bus"], s["line_name"])
-
-                    if clean not in live_telemetry:
-                        delay = fetch_live_delay(clean, f_key)
-                        alert = check_for_alerts(clean)
-                        live_telemetry[clean] = {"delay": delay, "has_alert": alert}
-
-        live_arrival_cache = build_live_arrival_cache(itineraries)
-        sim_results = run_competitive_simulation(
-            itineraries,
-            live_telemetry,
-            sim_start_time,
-            live_arrival_cache=live_arrival_cache
-        )
-
-        payload = []
-        for route in itineraries:
-            route_data = route.copy()
-            for step in route_data["itinerary"]:
-                if step.get("scheduled_departure") and isinstance(step["scheduled_departure"], datetime):
-                    step["scheduled_departure"] = step["scheduled_departure"].isoformat()
-
-            m = sim_results[route["route_index"]]
-            route_data["metrics"] = m
-            route_data["title"] = route_signature(route["itinerary"])
-
-            # Rewrite explanation to include explicit train and arrival times
-            base_exp = route_data.get("explanation", "")
-            route_data["explanation"] = f"{base_exp} | Departs ~{m['first_train_time']}. Arrives ~{m['est_arrival_time']}."
-
-            payload.append(route_data)
-
-        return {
-            "status": "success",
-            "run_start_time": execution_start_str,
-            "data": payload
-        }
-
-    except Exception as e:
-        logger.error(f"Error during simulation: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+            "worst_time": round(float(np.max(durations)),

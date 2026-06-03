@@ -14,13 +14,11 @@ import {
   Cpu,
   Wifi,
   Clock,
-  Timer,
 } from "lucide-react";
 
 export default function App() {
   const [origin, setOrigin] = useState("");
   const [destination, setDestination] = useState("");
-  const [offsetMins, setOffsetMins] = useState(0);
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState([]);
   const [runStartTime, setRunStartTime] = useState(null);
@@ -38,16 +36,10 @@ export default function App() {
     setActiveRouteIdx(0);
 
     try {
-      const parsedOffset = parseInt(offsetMins, 10) || 0;
-
       const res = await fetch(`${API_BASE_URL}/api/simulate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          origin,
-          destination,
-          offset_mins: parsedOffset,
-        }),
+        body: JSON.stringify({ origin, destination }),
       });
 
       if (!res.ok)
@@ -82,6 +74,10 @@ export default function App() {
       return (
         <Clock className="w-5 h-5 text-purple-400 drop-shadow-[0_0_8px_rgba(168,85,247,0.8)]" />
       );
+    if (mode === "ARRIVE")
+      return (
+        <MapPin className="w-5 h-5 text-emerald-500 drop-shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
+      );
     return (
       <Train className="w-5 h-5 text-orange-500 drop-shadow-[0_0_8px_rgba(249,115,22,0.8)]" />
     );
@@ -94,7 +90,6 @@ export default function App() {
 
   const activeRoute = results[activeRouteIdx];
 
-  // Helper to find maximum bound for the chart domain
   const MAX_CHART_MINS =
     results.length > 0
       ? Math.max(...results.map((r) => r.metrics.worst_time)) + 5
@@ -144,7 +139,7 @@ export default function App() {
             <div className="flex items-center justify-center md:justify-start gap-3 mb-3 animate-fade">
               <Cpu className="w-5 h-5 text-orange-500" />
               <span className="text-[10px] font-mono tracking-[0.2em] text-orange-500 uppercase border border-orange-500/30 bg-orange-500/10 px-3 py-1 rounded">
-                V9.2 Stochastic Matrix
+                V9.3 Stochastic Matrix
               </span>
             </div>
             <h1 className="text-5xl md:text-6xl font-black tracking-tighter text-white uppercase drop-shadow-2xl animate-slide-up">
@@ -184,7 +179,7 @@ export default function App() {
           style={{ animationDelay: "0.1s" }}
         >
           <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
-            <div className="md:col-span-4 relative group">
+            <div className="md:col-span-5 relative group">
               <label className="block text-[10px] font-mono uppercase tracking-widest text-slate-400 mb-2 ml-1">
                 Origin Node
               </label>
@@ -205,7 +200,7 @@ export default function App() {
               <ArrowRight className="w-5 h-5 text-slate-600" />
             </div>
 
-            <div className="md:col-span-3 relative group">
+            <div className="md:col-span-4 relative group">
               <label className="block text-[10px] font-mono uppercase tracking-widest text-slate-400 mb-2 ml-1">
                 Destination Node
               </label>
@@ -218,23 +213,6 @@ export default function App() {
                   placeholder="e.g., Brooklyn Bridge"
                   value={destination}
                   onChange={(e) => setDestination(e.target.value)}
-                />
-              </div>
-            </div>
-
-            <div className="md:col-span-2 relative group">
-              <label className="block text-[10px] font-mono uppercase tracking-widest text-slate-400 mb-2 ml-1">
-                Departure Offset
-              </label>
-              <div className="relative">
-                <Timer className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
-                <input
-                  type="number"
-                  min="0"
-                  className="w-full bg-[#050508] border border-white/10 rounded-xl py-3.5 pl-11 pr-4 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 text-white placeholder-slate-600 transition-all font-medium"
-                  placeholder="Mins (e.g., 14)"
-                  value={offsetMins}
-                  onChange={(e) => setOffsetMins(e.target.value)}
                 />
               </div>
             </div>
@@ -272,7 +250,7 @@ export default function App() {
               <div className="bg-[#0c0d16]/80 border border-orange-500/30 rounded-lg px-4 py-3 flex items-center gap-3 backdrop-blur-md animate-fade">
                 <Clock className="w-4 h-4 text-orange-500" />
                 <span className="text-xs text-slate-400 uppercase tracking-widest font-mono">
-                  Base Sim Departure Clock:{" "}
+                  Simulating Immediate Departure:{" "}
                   <span className="text-slate-200 font-bold ml-1">
                     {runStartTime}
                   </span>
@@ -318,69 +296,61 @@ export default function App() {
                     <h3 className="text-3xl font-black text-white tracking-tight mb-2 drop-shadow-md">
                       {activeRoute.title}
                     </h3>
-                    <p className="text-sm font-mono text-slate-400 bg-white/[0.02] p-3 rounded-lg border border-white/5 mt-3 leading-relaxed">
-                      {activeRoute.explanation}
-                    </p>
-                  </div>
-
-                  {/* EXACT TIMESTAMP INJECTIONS IN UI TIMELINE HEADER */}
-                  <div className="mb-6 flex flex-col md:flex-row items-center gap-4 bg-gradient-to-r from-orange-500/10 to-emerald-500/10 p-5 rounded-xl border border-white/10">
-                    <div className="flex-1 flex items-center gap-4 border-r border-white/10 pr-4">
-                      <Clock className="w-6 h-6 text-orange-500" />
-                      <div>
-                        <span className="text-[10px] uppercase tracking-widest text-slate-500 font-mono block">
-                          First Train Departure
-                        </span>
-                        <span className="font-bold text-white font-mono text-lg">
-                          {activeRoute.metrics.first_train_time}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="flex-1 flex items-center justify-end gap-4 pl-4">
-                      <div className="text-right">
-                        <span className="text-[10px] uppercase tracking-widest text-slate-500 font-mono block">
-                          Est. Final Arrival
-                        </span>
-                        <span className="font-bold text-emerald-400 font-mono text-lg">
-                          {activeRoute.metrics.est_arrival_time}
-                        </span>
-                      </div>
-                      <CheckCircle className="w-6 h-6 text-emerald-500" />
-                    </div>
                   </div>
 
                   <div className="relative border-l-2 border-[#1f202e] ml-4 space-y-6">
                     {activeRoute.itinerary.map((step, sIdx) => (
                       <div key={sIdx} className="relative pl-8 group">
-                        <div className="absolute -left-[9px] top-1.5 w-4 h-4 rounded-full bg-[#030305] border-2 border-slate-600 group-hover:border-orange-500 group-hover:shadow-[0_0_10px_rgba(234,88,12,0.8)] transition-all z-10" />
+                        <div
+                          className={`absolute -left-[9px] top-1.5 w-4 h-4 rounded-full bg-[#030305] border-2 z-10 transition-all ${step.mode === "ARRIVE" ? "border-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.8)]" : "border-slate-600 group-hover:border-orange-500 group-hover:shadow-[0_0_10px_rgba(234,88,12,0.8)]"}`}
+                        />
 
-                        <div className="bg-white/[0.02] p-4 rounded-xl border border-white/5 group-hover:border-white/10 group-hover:bg-white/[0.04] transition-all flex items-center justify-between">
+                        <div
+                          className={`bg-white/[0.02] p-4 rounded-xl border transition-all flex items-center justify-between ${step.mode === "ARRIVE" ? "border-emerald-500/30 bg-emerald-950/20" : "border-white/5 group-hover:border-white/10 group-hover:bg-white/[0.04]"}`}
+                        >
                           <div className="flex items-center gap-4">
                             <div className="bg-black/50 p-2 rounded-lg border border-white/5">
                               {getModeIcon(step.mode)}
                             </div>
                             <div>
-                              <span className="font-bold text-slate-100 text-sm block">
+                              <span
+                                className={`font-bold text-sm block ${step.mode === "ARRIVE" ? "text-emerald-400" : "text-slate-100"}`}
+                              >
                                 {step.line_display}
                               </span>
-                              {step.departure_stop !== "N/A" && (
+
+                              {step.mode === "TRANSIT" ? (
+                                <span className="text-slate-400 font-mono text-[11px] mt-1 flex items-center gap-2">
+                                  <span className="text-orange-400 font-bold">
+                                    Wait: ~{step.expected_wait_mins}m
+                                  </span>
+                                  <span>•</span>
+                                  <span className="text-emerald-400">
+                                    Board: {step.expected_board_time}
+                                  </span>
+                                </span>
+                              ) : step.mode === "ARRIVE" ? (
+                                <span className="text-emerald-400 font-mono text-[11px] mt-1 block">
+                                  Est. Arrival: {step.expected_board_time}
+                                </span>
+                              ) : (
                                 <span className="text-slate-500 font-mono text-[11px] mt-1 block">
-                                  {step.mode === "DOCKING_OVERHEAD"
-                                    ? "LOC"
-                                    : "DEP"}
-                                  : {step.departure_stop}
+                                  Start: {step.expected_board_time}
                                 </span>
                               )}
                             </div>
                           </div>
-                          <div className="text-right">
-                            <span className="text-white font-mono text-lg font-bold block">
-                              {step.baseline_duration.toFixed(0)}m
-                            </span>
-                            <span className="text-[10px] uppercase tracking-widest text-slate-500">
-                              Duration
-                            </span>
-                          </div>
+
+                          {step.mode !== "ARRIVE" && (
+                            <div className="text-right">
+                              <span className="text-white font-mono text-lg font-bold block">
+                                {step.baseline_duration.toFixed(0)}m
+                              </span>
+                              <span className="text-[10px] uppercase tracking-widest text-slate-500">
+                                Duration
+                              </span>
+                            </div>
+                          )}
                         </div>
                       </div>
                     ))}
