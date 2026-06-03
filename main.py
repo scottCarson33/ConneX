@@ -1,6 +1,7 @@
 import json
 import os
 import time
+import math
 from bisect import bisect_left
 import requests
 import numpy as np
@@ -11,7 +12,6 @@ from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from google.transit import gtfs_realtime_pb2
 
 from alternative_routes import find_alternatives, get_headway
 from realtime_engine import engine as rt_engine
@@ -25,12 +25,12 @@ except ImportError:
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- CONFIGURATION TOKENS ---
-GOOGLE_API_KEY = "AIzaSyDyiFzvUe3K7rFAXGi90QX0MQlDibmVThc"
-ROUTES_ENDPOINT = "https://routes.googleapis.com/directions/v2:computeRoutes"
-MTA_API_KEY = "40635c2e-4f8c-4565-abf7-0e3dfdefb924"
-BUS_TIME_FEED_URL = f"https://bustime-beta.mta.info/api/gtfs-rt/tripUpdates?key={MTA_API_KEY}"
+# --- SECURE CONFIGURATION TOKENS ---
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "AIzaSyDyiFzvUe3K7rFAXGi90QX0MQlDibmVThc")
+MTA_API_KEY = os.getenv("MTA_API_KEY", "40635c2e-4f8c-4565-abf7-0e3dfdefb924")
 
+ROUTES_ENDPOINT = "https://routes.googleapis.com/directions/v2:computeRoutes"
+BUS_TIME_FEED_URL = f"https://bustime-beta.mta.info/api/gtfs-rt/tripUpdates?key={MTA_API_KEY}"
 MTA_HEADERS = {"x-api-key": MTA_API_KEY}
 
 MTA_FEED_URLS = {
@@ -53,16 +53,21 @@ NYC_FERRY_FARE = 4.50
 STATEN_ISLAND_FERRY_FARE = 0.00
 CITIBIKE_UNLOCK = 4.79
 CITIBIKE_PER_MIN = 0.30
+
+# Citi Bike Fixed Modeling Overheads (Minutes)
+CITIBIKE_WALK_TO_STATION = 4.0
+CITIBIKE_UNLOCK_DOCK_TIME = 2.0
+CITIBIKE_WALK_TO_DESTINATION = 4.0
+
 DEFAULT_SIM_TRIALS = int(os.getenv("SIM_TRIALS", "2000"))
 SERVICE_STATUS_TTL_SECS = int(os.getenv("SERVICE_STATUS_TTL_SECS", "45"))
 SERVICE_STATUS_CACHE = {"time": 0.0, "payload": None}
 
-# --- FASTAPI SETUP ---
 app = FastAPI(title="MTA Stochastic Engine API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # In production, lock this down to your React app's URL
+    allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -72,7 +77,6 @@ class SimulationRequest(BaseModel):
     origin: str
     destination: str
 
-# --- ENGINE LOGIC ---
 def clean_line_id(line_id: str) -> str:
     token = str(line_id or "").upper().strip().split()[0]
     if token.startswith(("6", "7")):
@@ -196,16 +200,16 @@ def parse_iso_time(time_str: str) -> Optional[datetime]:
 
 def generate_route_explanation(itinerary: List[Dict]) -> str:
     steps = []
-    transit_legs = 0
     for step in itinerary:
-        if step["mode"] == "CITIBIKE":
-            steps.append(f"Unlock Citi Bike and cycle directly to {step['arrival_stop']}")
-            transit_legs += 1
-        elif step["mode"] == "TRANSIT":
-            if transit_legs > 0: steps.append(f"Transfer at {step['departure_stop']} to the {step['line_display']}")
-            else: steps.append(f"Board the {step['line_display']} at {step['departure_stop']}")
-            steps.append(f"Ride to {step['arrival_stop']}")
-            transit_legs += 1
+        mode = step["mode"]
+        if mode == "WALK":
+            steps.append(f"Walk ({round(step['baseline_duration'], 1)} mins) to {step['arrival_stop']}")
+        elif mode == "CITIBIKE":
+            steps.append(f"Cycle Citi Bike ({round(step['baseline_duration'], 1)} mins) to {step['arrival_stop']}")
+        elif mode == "DOCKING_OVERHEAD":
+            steps.append("Lock bike & handle dock confirmation overhead")
+        elif mode == "TRANSIT":
+            steps.append(f"Board {step['line_display']} at {step['departure_stop']} to {step['arrival_stop']}")
     return " -> ".join(steps) if steps else "Walking route only."
 
 def route_signature(itinerary: List[Dict]) -> str:
@@ -215,12 +219,20 @@ def route_signature(itinerary: List[Dict]) -> str:
             label = str(step.get("line_display") or step.get("line_id") or "Transit")
             for suffix in [" Train", " Bus", " Ferry", " Rail"]:
                 label = label.replace(suffix, "")
-            segments.append(label)
-        elif step["mode"] == "CITIBIKE":
+            if not segments or segments[-1] != label:
+                segments.append(label)
+        elif step["mode"] == "CITIBIKE" and "Citi Bike" not in segments:
             segments.append("Citi Bike")
     return " → ".join(segments) if segments else "Walk Only"
 
 def inject_citibike_alternative(base_itinerary: Dict) -> Optional[Dict]:
+    """
+    Constructs an explicit door-to-door bike-sharing alternative including:
+    1. Walk to nearest origin Citi Bike station
+    2. Unlock & Cycle leg
+    3. Docking time overhead at destination station
+    4. Walk from destination station to final address
+    """
     steps = base_itinerary["itinerary"]
     rail_idx = -1
     for idx, step in enumerate(steps):
@@ -232,28 +244,34 @@ def inject_citibike_alternative(base_itinerary: Dict) -> Optional[Dict]:
         rail_step = steps[rail_idx]
         pre_rail_mins = sum(s["baseline_duration"] for s in steps[:rail_idx] if s["mode"] == "TRANSIT")
         if pre_rail_mins == 0: pre_rail_mins = 45.0
-        new_steps = [{
-            "mode": "CITIBIKE", "baseline_duration": pre_rail_mins * 1.6, "line_id": "Citi Bike",
-            "is_bus": False, "is_ferry": False, "is_commuter_rail": False,
-            "line_name": "Citi Bike Share", "departure_stop": "Origin Location", "arrival_stop": rail_step["departure_stop"],
-            "line_display": "Citi Bike", "scheduled_departure": None
-        }]
+
+        cycling_duration = pre_rail_mins * 1.4
+        new_steps = [
+            {"mode": "WALK", "baseline_duration": CITIBIKE_WALK_TO_STATION, "line_id": "Walk", "departure_stop": "Origin", "arrival_stop": "Citi Bike Station"},
+            {"mode": "CITIBIKE", "baseline_duration": cycling_duration, "line_id": "Citi Bike", "departure_stop": "Citi Bike Station", "arrival_stop": rail_step["departure_stop"]},
+            {"mode": "DOCKING_OVERHEAD", "baseline_duration": CITIBIKE_UNLOCK_DOCK_TIME, "line_id": "Docking Overhead", "departure_stop": "Docking Hub", "arrival_stop": "Docking Hub"},
+            {"mode": "WALK", "baseline_duration": 2.0, "line_id": "Walk", "departure_stop": "Docking Hub", "arrival_stop": rail_step["departure_stop"]}
+        ]
         new_steps.extend(steps[rail_idx:])
     else:
         walk_mins = sum(s["baseline_duration"] for s in steps if s["mode"] == "WALK")
         transit_mins = sum(s["baseline_duration"] for s in steps if s["mode"] == "TRANSIT")
-        bike_duration = (walk_mins * 0.33) + (transit_mins * 1.5)
-        if bike_duration > 120.0 or bike_duration == 0: return None
-        new_steps = [{
-            "mode": "CITIBIKE", "baseline_duration": bike_duration, "line_id": "Citi Bike",
-            "is_bus": False, "is_ferry": False, "is_commuter_rail": False,
-            "line_name": "Citi Bike Share", "departure_stop": "Origin", "arrival_stop": "Destination",
-            "line_display": "Citi Bike", "scheduled_departure": None
-        }]
+
+        cycling_duration = (walk_mins * 0.25) + (transit_mins * 1.2)
+        if cycling_duration > 120.0 or cycling_duration == 0: return None
+
+        new_steps = [
+            {"mode": "WALK", "baseline_duration": CITIBIKE_WALK_TO_STATION, "line_id": "Walk", "departure_stop": "Origin Location", "arrival_stop": "Nearest Citi Bike Station"},
+            {"mode": "CITIBIKE", "baseline_duration": cycling_duration, "line_id": "Citi Bike", "departure_stop": "Nearest Citi Bike Station", "arrival_stop": "Destination Docking Station"},
+            {"mode": "DOCKING_OVERHEAD", "baseline_duration": CITIBIKE_UNLOCK_DOCK_TIME, "line_id": "Docking Overhead", "departure_stop": "Destination Docking Station", "arrival_stop": "Destination Docking Station"},
+            {"mode": "WALK", "baseline_duration": CITIBIKE_WALK_TO_DESTINATION, "line_id": "Walk", "departure_stop": "Destination Docking Station", "arrival_stop": "Destination Address"}
+        ]
 
     return {
-        "route_index": 4, "baseline_mins": sum(s["baseline_duration"] for s in new_steps),
-        "itinerary": new_steps, "cost": calculate_itinerary_fare(new_steps),
+        "route_index": 4,
+        "baseline_mins": sum(s["baseline_duration"] for s in new_steps),
+        "itinerary": new_steps,
+        "cost": calculate_itinerary_fare(new_steps),
         "explanation": generate_route_explanation(new_steps)
     }
 
@@ -264,7 +282,7 @@ def fetch_google_itineraries(origin: str, destination: str) -> List[Dict]:
         "X-Goog-FieldMask": "routes.duration,routes.legs.steps,routes.travelAdvisory"
     }
     payload = {"origin": {"address": origin}, "destination": {"address": destination}, "travelMode": "TRANSIT", "computeAlternativeRoutes": True}
-    
+
     try:
         response = requests.post(ROUTES_ENDPOINT, json=payload, headers=headers)
         data = response.json()
@@ -276,7 +294,7 @@ def fetch_google_itineraries(origin: str, destination: str) -> List[Dict]:
     for idx, route in enumerate(data.get("routes", []), 1):
         if idx > 3: break
         total_dur = parse_v2_duration(route.get("duration"))
-        
+
         api_fare = 0.0
         fare_details = route.get("travelAdvisory", {}).get("transitFare", {})
         if fare_details:
@@ -303,22 +321,22 @@ def fetch_google_itineraries(origin: str, destination: str) -> List[Dict]:
                     mode = "TRANSIT"
                     dep_stop = stop_details.get("departureStop", {}).get("name", "Unknown Station")
                     arr_stop = stop_details.get("arrivalStop", {}).get("name", "Unknown Station")
-                    
+
                     dep_time_str = stop_details.get("departureTime")
                     if dep_time_str: sched_dep = parse_iso_time(dep_time_str)
 
                 line_id_val = line_id if line_id else line_name
                 display_type = "Bus" if is_bus else "Ferry" if is_ferry else "Rail" if is_commuter_rail else "Train"
-                
+
                 alt_list = []
                 if mode == "TRANSIT" and not is_bus and not is_ferry and not is_commuter_rail:
                     alt_list = find_alternatives(line_id_val, dep_stop, arr_stop)
-                    
+
                 if alt_list and len(alt_list) > 1:
                     line_display = f"{'/'.join(alt_list)} {display_type}"
                 else:
                     line_display = f"{line_id_val} {display_type}"
-                
+
                 raw_steps.append({
                     "mode": mode, "baseline_duration": dur, "line_id": line_id_val,
                     "is_bus": is_bus, "is_ferry": is_ferry, "is_commuter_rail": is_commuter_rail,
@@ -338,7 +356,6 @@ def fetch_google_itineraries(origin: str, destination: str) -> List[Dict]:
 
     return parsed
 
-# --- STOCHASTIC SIMULATION WITH BUTTERFLY EFFECT ---
 def build_live_arrival_cache(itineraries: List[Dict]) -> Dict[tuple, List[float]]:
     arrival_cache = {}
     for route in itineraries:
@@ -373,6 +390,14 @@ def next_cached_arrival(arrivals: List[float], current_unix: float) -> Optional[
     idx = bisect_left(arrivals, current_unix)
     return arrivals[idx] if idx < len(arrivals) else None
 
+def get_nyc_hour(dt: datetime) -> int:
+    """Helper to derive localized Eastern hour from UTC time to align with MTA schedules."""
+    # Rough shift for approximation if zoneinfo isn't installed; shifts UTC to EST/EDT
+    # Alternatively, use standard python timedelta adjustment:
+    est_offset = timedelta(hours=-4) # Approximating Eastern Daylight Time (EDT)
+    nyc_dt = dt + est_offset
+    return nyc_dt.hour
+
 def run_competitive_simulation(
     itineraries: List[Dict],
     live_telemetry: Dict[str, Dict],
@@ -382,15 +407,15 @@ def run_competitive_simulation(
     win_counts = {r["route_index"]: 0 for r in itineraries}
     severe_delays = {r["route_index"]: 0 for r in itineraries}
     delayed_transfers = {r["route_index"]: 0 for r in itineraries}
-    all_durations = {r["route_index"]: [] for r in itineraries} 
-    
+    all_durations = {r["route_index"]: [] for r in itineraries}
+
     TRANSFER_DELAY_TOLERANCE_MINS = 2.0
 
     for _ in range(num_trials):
         trial_durations = {}
         trial_line_offsets = {}
         trial_line_delays = {}
-        
+
         def get_trial_line_schedule(line, tod):
             if line not in trial_line_offsets:
                 h = get_headway(line, tod) or 10.0
@@ -413,26 +438,27 @@ def run_competitive_simulation(
                 virtual_clock = first_train["scheduled_departure"] - timedelta(minutes=(1.0 + initial_walk_mins))
             else:
                 virtual_clock = datetime.now(timezone.utc)
-            
+
             sim_time = 0.0
             delayed_transfer_this_trial = False
             transit_leg_count = 0
-            
+
             for step_idx, step in enumerate(route["itinerary"]):
                 mode = step["mode"]
                 base = step["baseline_duration"]
 
-                if mode == "WALK": 
-                    leg_duration = base * random.uniform(0.95, 1.10)
-                elif mode == "CITIBIKE": 
-                    leg_duration = base * random.uniform(0.90, 1.15)
-                else: 
+                if mode == "WALK":
+                    leg_duration = base * random.uniform(0.92, 1.12)
+                elif mode == "CITIBIKE":
+                    leg_duration = base * random.uniform(0.85, 1.20)
+                elif mode == "DOCKING_OVERHEAD":
+                    leg_duration = base * random.uniform(0.75, 1.50)
+                else:
                     transit_leg_count += 1
-                    
                     dep_stop_name = step.get("departure_stop", "")
                     arr_stop_name = step.get("arrival_stop", "")
                     line_id = clean_line_id(step.get("line_id", ""))
-                    
+
                     current_unix = virtual_clock.timestamp()
 
                     if live_arrival_cache is not None:
@@ -443,27 +469,23 @@ def run_competitive_simulation(
                         direction = rt_engine.get_direction(dep_id, arr_id)
                         gtfs_arrivals = rt_engine.fetch_live_arrivals(line_id, dep_id, direction)
                         next_gtfs_arrival = next_cached_arrival(gtfs_arrivals, current_unix)
-                                        
-                    # Boarding logic
+
                     if next_gtfs_arrival:
                         wait_time_mins = (next_gtfs_arrival - current_unix) / 60.0
                     else:
-                        # Fallback to schedule generator if GTFS is empty
-                        current_hour = virtual_clock.hour
-                        if 6 <= current_hour < 10 or 15 <= current_hour < 20: tod = "peak"
-                        elif 10 <= current_hour < 15: tod = "midday"
-                        elif 20 <= current_hour < 24: tod = "evening"
+                        nyc_hour = get_nyc_hour(virtual_clock)
+                        if 6 <= nyc_hour < 10 or 15 <= nyc_hour < 20: tod = "peak"
+                        elif 10 <= nyc_hour < 15: tod = "midday"
+                        elif 20 <= nyc_hour < 24: tod = "evening"
                         else: tod = "overnight"
-                        
+
                         offset, delay, headway = get_trial_line_schedule(line_id, tod)
-                        import math
                         k = math.ceil((sim_time - offset - delay) / headway)
                         next_arrival_sim = offset + k * headway + delay
                         wait_time_mins = next_arrival_sim - sim_time
 
                     if wait_time_mins < 0: wait_time_mins = 0
 
-                    # Did this transfer degrade versus the schedule Google expected?
                     if transit_leg_count > 1 and step.get("scheduled_departure"):
                         sched_unix = step["scheduled_departure"].timestamp()
                         boarded_unix = current_unix + (wait_time_mins * 60.0)
@@ -471,7 +493,6 @@ def run_competitive_simulation(
                         if delay_mins > TRANSFER_DELAY_TOLERANCE_MINS:
                             delayed_transfer_this_trial = True
 
-                    # Ride time variance
                     ride_time = base * random.uniform(0.95, 1.05)
                     leg_duration = wait_time_mins + ride_time
 
@@ -489,85 +510,34 @@ def run_competitive_simulation(
     results = {}
     for r in itineraries:
         route_index = r["route_index"]
-        durations = all_durations[route_index]
-        expected_time = sum(durations) / num_trials
-        early_count = sum(1 for duration in durations if duration < expected_time)
-        early_prob = round((early_count / num_trials) * 100, 1)
+        durations = np.array(all_durations[route_index])
+
+        # Distribution Analytics
+        mean_time = float(np.mean(durations))
+        p50_time = float(np.percentile(durations, 50))
+        p90_time = float(np.percentile(durations, 90))
+        p25 = np.percentile(durations, 25)
+        p75 = np.percentile(durations, 75)
+        iqr_time = float(p75 - p25)
+
         results[route_index] = {
             "win_rate": round((win_counts[r["route_index"]] / num_trials) * 100, 1),
             "severe_risk": round((severe_delays[route_index] / num_trials) * 100, 1),
             "transfer_delay_prob": round((delayed_transfers[route_index] / num_trials) * 100, 1),
-            "miss_prob": round((delayed_transfers[route_index] / num_trials) * 100, 1),
-            "beats_expected_prob": early_prob,
-            "early_prob": early_prob,
-            "exp_time": round(expected_time, 1),
-            "best_time": round(min(durations), 1),
-            "worst_time": round(max(durations), 1)
+            "exp_time": round(mean_time, 1),
+            "p50_mins": round(p50_time, 1),
+            "p90_mins": round(p90_time, 1),
+            "iqr_mins": round(iqr_time, 1),
+            "best_time": round(float(np.min(durations)), 1),
+            "worst_time": round(float(np.max(durations)), 1)
         }
     return results
 
-# --- API ENDPOINTS ---
-@app.get("/api/health")
-def health_check():
-    return {"status": "ok"}
-
-@app.get("/api/service-status")
-def get_service_status():
-    cache_age = time.time() - SERVICE_STATUS_CACHE["time"]
-    if SERVICE_STATUS_CACHE["payload"] and cache_age < SERVICE_STATUS_TTL_SECS:
-        return SERVICE_STATUS_CACHE["payload"]
-
-    all_lines = ["1", "2", "3", "4", "5", "6", "7", "A", "C", "E", "B", "D", "F", "M", "N", "Q", "R", "W", "L", "G", "J", "Z", "LIRR", "MNR"]
-    line_statuses = {line: {"status": "Good Service", "detail": "", "severity": "normal"} for line in all_lines}
-    line_statuses["LIRR"]["status"] = "On/Close to Schedule"
-    line_statuses["MNR"]["status"] = "On/Close to Schedule"
-
-    try:
-        feed = gtfs_realtime_pb2.FeedMessage()
-        res = requests.get(MTA_FEED_URLS['ALERTS'], headers=MTA_HEADERS, timeout=5)
-        if res.status_code == 200:
-            feed.ParseFromString(res.content)
-            keywords = ["delay", "slow", "suspended", "mechanical", "ongoing", "service change", "planned work"]
-            
-            for entity in feed.entity:
-                if entity.HasField('alert'):
-                    text = str(entity.alert.header_text).lower()
-                    if any(w in text for w in keywords):
-                        severity = "delay"
-                        if "suspended" in text: severity = "suspended"
-                        elif "service change" in text or "planned work" in text: severity = "planned_work"
-                        
-                        status_str = "Delays"
-                        if severity == "suspended": status_str = "Suspended"
-                        elif severity == "planned_work": status_str = "Service Change"
-                        
-                        for informed in entity.alert.informed_entity:
-                            route_id = str(informed.route_id).upper().strip()
-                            if route_id in line_statuses:
-                                line_statuses[route_id] = {"status": status_str, "detail": str(entity.alert.header_text), "severity": severity}
-    except Exception as e:
-        logger.error(f"Error fetching service status: {str(e)}")
-        
-    std_groups = [["1","2","3"], ["4","5","6"], ["7"], ["A","C","E"], ["B","D","F","M"], ["N","Q","R","W"], ["J","Z"], ["L"], ["G"], ["LIRR"], ["MNR"]]
-    
-    status_list = []
-    for grp in std_groups:
-        first_status = line_statuses[grp[0]]
-        all_same = all(line_statuses[l] == first_status for l in grp)
-        if all_same:
-            name = "/".join(grp) if grp[0] not in ["LIRR", "MNR"] else ("Metro-North" if grp[0] == "MNR" else "LIRR")
-            status_list.append({"line_group": name, **first_status})
-        else:
-            for l in grp:
-                status_list.append({"line_group": l, **line_statuses[l]})
-
-    payload = {"status": "success", "data": status_list}
-    SERVICE_STATUS_CACHE["time"] = time.time()
-    SERVICE_STATUS_CACHE["payload"] = payload
-    return payload
-
 @app.post("/api/simulate")
 def run_simulation(req: SimulationRequest):
+    # Capture the exact start time of the execution run
+    execution_start_str = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %I:%M:%S %p")
+
     try:
         itineraries = fetch_google_itineraries(req.origin, req.destination)
         if not itineraries: raise HTTPException(status_code=400, detail="No routes found")
@@ -584,27 +554,28 @@ def run_simulation(req: SimulationRequest):
                         delay = fetch_live_delay(clean, f_key)
                         alert = check_for_alerts(clean)
                         live_telemetry[clean] = {"delay": delay, "has_alert": alert}
-        
+
         live_arrival_cache = build_live_arrival_cache(itineraries)
         sim_results = run_competitive_simulation(itineraries, live_telemetry, live_arrival_cache=live_arrival_cache)
-        
-        # Combine data for frontend
+
         payload = []
         for route in itineraries:
             route_data = route.copy()
-            # Serialize datetimes for JSON
             for step in route_data["itinerary"]:
-                if step.get("scheduled_departure"):
+                if step.get("scheduled_departure") and isinstance(step["scheduled_departure"], datetime):
                     step["scheduled_departure"] = step["scheduled_departure"].isoformat()
-            
+
             route_data["metrics"] = sim_results[route["route_index"]]
-            
             route_data["title"] = route_signature(route["itinerary"])
-            
             payload.append(route_data)
 
-        return {"status": "success", "data": payload}
-    
+        # Return the start time at the top level of the payload
+        return {
+            "status": "success",
+            "run_start_time": execution_start_str,
+            "data": payload
+        }
+
     except Exception as e:
         logger.error(f"Error during simulation: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

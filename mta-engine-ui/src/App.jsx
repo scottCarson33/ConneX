@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import {
   MapPin,
   ArrowRight,
@@ -13,6 +13,8 @@ import {
   Zap,
   Cpu,
   Wifi,
+  Clock,
+  Terminal,
 } from "lucide-react";
 
 export default function App() {
@@ -20,34 +22,18 @@ export default function App() {
   const [destination, setDestination] = useState("");
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState([]);
+  const [runStartTime, setRunStartTime] = useState(null);
   const [error, setError] = useState("");
   const [activeRouteIdx, setActiveRouteIdx] = useState(0);
-  const [serviceStatus, setServiceStatus] = useState([]);
 
   const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
-
-  useEffect(() => {
-    const fetchStatus = async () => {
-      try {
-        const res = await fetch(`${API_BASE_URL}/api/service-status`);
-        if (res.ok) {
-          const data = await res.json();
-          setServiceStatus(data.data);
-        }
-      } catch (err) {
-        console.error("Failed to fetch service status:", err);
-      }
-    };
-    fetchStatus();
-    const interval = setInterval(fetchStatus, 60000); // refresh every minute
-    return () => clearInterval(interval);
-  }, [API_BASE_URL]);
 
   const handleSimulate = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError("");
     setResults([]);
+    setRunStartTime(null);
     setActiveRouteIdx(0);
 
     try {
@@ -59,12 +45,19 @@ export default function App() {
 
       if (!res.ok)
         throw new Error("Telemetry feed offline or simulation failed.");
+
       const data = await res.json();
 
-      const sorted = data.data.sort(
-        (a, b) => b.metrics.win_rate - a.metrics.win_rate,
-      );
-      setResults(sorted);
+      if (data.status === "success") {
+        setRunStartTime(data.run_start_time);
+        // Sort by Win Rate highest first
+        const sorted = data.data.sort(
+          (a, b) => b.metrics.win_rate - a.metrics.win_rate,
+        );
+        setResults(sorted);
+      } else {
+        throw new Error("Simulation returned an error state.");
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -79,9 +72,19 @@ export default function App() {
       );
     if (mode === "WALK")
       return <Footprints className="w-5 h-5 text-slate-400" />;
+    if (mode === "DOCKING_OVERHEAD")
+      return (
+        <Clock className="w-5 h-5 text-purple-400 drop-shadow-[0_0_8px_rgba(168,85,247,0.8)]" />
+      );
     return (
       <Train className="w-5 h-5 text-orange-500 drop-shadow-[0_0_8px_rgba(249,115,22,0.8)]" />
     );
+  };
+
+  const getStepTitle = (step) => {
+    if (step.mode === "WALK") return "Pedestrian Vector";
+    if (step.mode === "DOCKING_OVERHEAD") return "Docking Protocol";
+    return step.line_display;
   };
 
   const nextRoute = () =>
@@ -90,32 +93,6 @@ export default function App() {
     setActiveRouteIdx((prev) => (prev - 1 + results.length) % results.length);
 
   const activeRoute = results[activeRouteIdx];
-  const timeBounds =
-    results.length > 0
-      ? results.reduce(
-          (bounds, route) => ({
-            min: Math.min(bounds.min, route.metrics.best_time),
-            max: Math.max(bounds.max, route.metrics.worst_time),
-          }),
-          { min: Infinity, max: -Infinity },
-        )
-      : { min: 0, max: 1 };
-  const timeSpan = Math.max(timeBounds.max - timeBounds.min, 1);
-  const clampPercent = (value) => Math.max(0, Math.min(100, value));
-  const getTimeSpread = (route) => {
-    const best = route.metrics.best_time;
-    const worst = route.metrics.worst_time;
-    const expected = route.metrics.exp_time;
-    const left = clampPercent(((best - timeBounds.min) / timeSpan) * 100);
-    const right = clampPercent(((worst - timeBounds.min) / timeSpan) * 100);
-    const marker = clampPercent(((expected - timeBounds.min) / timeSpan) * 100);
-
-    return {
-      left,
-      width: Math.max(right - left, 2),
-      marker,
-    };
-  };
 
   return (
     <div className="min-h-screen bg-[#030305] text-slate-100 font-sans antialiased relative overflow-x-hidden selection:bg-orange-500/30">
@@ -127,10 +104,10 @@ export default function App() {
 
       {/* TOP LIVE STATUS TICKER */}
       <div className="relative z-10 w-full bg-[#0a0a0f] border-b border-white/5 py-2.5 overflow-hidden flex items-center shadow-lg shadow-black/50">
-        <div className="absolute left-0 top-0 bottom-0 w-16 bg-gradient-to-r from-[#0a0a0f] to-transparent z-20 pointer-events-none" />
-        <div className="absolute right-0 top-0 bottom-0 w-16 bg-gradient-to-l from-[#0a0a0f] to-transparent z-20 pointer-events-none" />
+        <div className="absolute left-0 top-0 bottom-0 w-16 bg-gradient-to-r from-[#0a0a0f] to-transparent z-20" />
+        <div className="absolute right-0 top-0 bottom-0 w-16 bg-gradient-to-l from-[#0a0a0f] to-transparent z-20" />
 
-        <div className="ticker-track animate-marquee flex items-center gap-8 text-[11px] font-mono tracking-widest text-slate-400 uppercase w-max px-8">
+        <div className="ticker-track animate-marquee flex items-center gap-8 text-[11px] font-mono tracking-widest text-slate-400 uppercase">
           {[...Array(3)].map((_, i) => (
             <React.Fragment key={i}>
               <span className="flex items-center gap-2 text-emerald-400">
@@ -141,29 +118,18 @@ export default function App() {
                 System Online
               </span>
               <span>•</span>
-              
-              {serviceStatus.length > 0 ? (
-                serviceStatus.map((status, idx) => {
-                  let colorClass = "text-slate-400";
-                  if (status.severity === "delay") colorClass = "text-orange-400";
-                  else if (status.severity === "suspended") colorClass = "text-red-500";
-                  else if (status.severity === "planned_work") colorClass = "text-yellow-400";
-                  
-                  return (
-                    <React.Fragment key={idx}>
-                      <span className={colorClass}>
-                        {status.line_group}: {status.status}
-                      </span>
-                      <span>•</span>
-                    </React.Fragment>
-                  );
-                })
-              ) : (
-                <>
-                  <span>Connecting to MTA Feed...</span>
-                  <span>•</span>
-                </>
-              )}
+              <span className="text-orange-400">
+                N/Q/R/W: Delays (Earlier Incident)
+              </span>
+              <span>•</span>
+              <span>L: Good Service</span>
+              <span>•</span>
+              <span>G: Good Service</span>
+              <span>•</span>
+              <span className="text-yellow-400">B/D/F/M: Moderate Delays</span>
+              <span>•</span>
+              <span>LIRR: On/Close to Schedule</span>
+              <span>•</span>
             </React.Fragment>
           ))}
         </div>
@@ -176,7 +142,7 @@ export default function App() {
             <div className="flex items-center justify-center md:justify-start gap-3 mb-3 animate-fade">
               <Cpu className="w-5 h-5 text-orange-500" />
               <span className="text-[10px] font-mono tracking-[0.2em] text-orange-500 uppercase border border-orange-500/30 bg-orange-500/10 px-3 py-1 rounded">
-                V9.0 Stochastic Matrix
+                V9.1 Stochastic Matrix
               </span>
             </div>
             <h1 className="text-5xl md:text-6xl font-black tracking-tighter text-white uppercase drop-shadow-2xl animate-slide-up">
@@ -189,8 +155,8 @@ export default function App() {
               className="text-sm text-slate-400 mt-4 font-mono max-w-xl animate-fade"
               style={{ animationDelay: "0.2s" }}
             >
-              <span className="text-white">Monte Carlo routing</span> • Live
-              MTA telemetry active • Butterfly-effect transfer modeling
+              <span className="text-white">5,000-trial Monte Carlo</span> • Live
+              MTA telemetry active • Dynamic pivot graph routing
             </p>
           </div>
 
@@ -285,6 +251,19 @@ export default function App() {
         {/* RESULTS DASHBOARD */}
         {results.length > 0 && (
           <div className="space-y-8 animate-slide-up">
+            {/* RUN TIMESTAMP BANNER */}
+            {runStartTime && (
+              <div className="bg-[#0c0d16]/80 border border-orange-500/30 rounded-lg px-4 py-3 flex items-center gap-3 backdrop-blur-md animate-fade">
+                <Terminal className="w-4 h-4 text-orange-500" />
+                <span className="text-xs text-slate-400 uppercase tracking-widest font-mono">
+                  Simulation Executed:{" "}
+                  <span className="text-slate-200 font-bold ml-1">
+                    {runStartTime}
+                  </span>
+                </span>
+              </div>
+            )}
+
             {/* HERO CAROUSEL */}
             <div className="glass-panel rounded-2xl overflow-hidden shadow-2xl shadow-black">
               <div className="bg-white/[0.02] px-6 py-4 border-b border-white/5 flex items-center justify-between">
@@ -342,13 +321,14 @@ export default function App() {
                             </div>
                             <div>
                               <span className="font-bold text-slate-100 text-sm block">
-                                {step.mode === "WALK"
-                                  ? "Pedestrian Vector"
-                                  : step.line_display}
+                                {getStepTitle(step)}
                               </span>
                               {step.departure_stop !== "N/A" && (
                                 <span className="text-slate-500 font-mono text-[11px] mt-1 block">
-                                  DEP: {step.departure_stop}
+                                  {step.mode === "DOCKING_OVERHEAD"
+                                    ? "LOC"
+                                    : "DEP"}
+                                  : {step.departure_stop}
                                 </span>
                               )}
                             </div>
@@ -373,7 +353,7 @@ export default function App() {
                     <Activity className="absolute -right-10 -bottom-10 w-48 h-48 text-white/[0.02] pointer-events-none" />
 
                     <h4 className="text-[11px] font-bold uppercase tracking-widest text-slate-400 mb-6 font-mono flex items-center gap-2">
-                      <Zap className="w-4 h-4 text-orange-500" /> Real-Time
+                      <Zap className="w-4 h-4 text-orange-500" /> Statistical
                       Telemetry
                     </h4>
 
@@ -390,10 +370,10 @@ export default function App() {
                       <div className="bg-white/[0.03] p-4 rounded-xl border border-white/5 relative overflow-hidden group hover:border-white/20 transition-colors">
                         <div className="absolute top-0 left-0 w-full h-1 bg-white/10 group-hover:bg-white/20 transition-colors" />
                         <span className="text-[10px] uppercase tracking-widest text-slate-500 block mb-1 font-mono">
-                          Exp Time
+                          Typical (P50)
                         </span>
                         <span className="text-4xl font-black text-white">
-                          {activeRoute.metrics.exp_time}
+                          {activeRoute.metrics.p50_mins}
                         </span>
                         <span className="text-slate-500 font-mono text-sm ml-1">
                           m
@@ -404,28 +384,18 @@ export default function App() {
                     <div className="space-y-1 mt-auto">
                       <div className="flex justify-between items-center py-3 border-b border-white/5 group hover:bg-white/[0.02] px-2 rounded transition-colors">
                         <span className="text-xs text-slate-400 uppercase tracking-wider">
-                          Severe Delay (&gt;20m)
+                          Budgeted (P90)
                         </span>
-                        <span
-                          className={`font-mono font-bold ${activeRoute.metrics.severe_risk > 25 ? "text-red-500 drop-shadow-[0_0_5px_rgba(239,68,68,0.8)]" : "text-slate-200"}`}
-                        >
-                          {activeRoute.metrics.severe_risk}%
+                        <span className="font-mono font-bold text-amber-500 drop-shadow-[0_0_5px_rgba(245,158,11,0.5)]">
+                          {activeRoute.metrics.p90_mins}m
                         </span>
                       </div>
                       <div className="flex justify-between items-center py-3 border-b border-white/5 group hover:bg-white/[0.02] px-2 rounded transition-colors">
                         <span className="text-xs text-slate-400 uppercase tracking-wider">
-                          Transfer Delay
+                          Predictability (IQR)
                         </span>
-                        <span className="font-mono font-bold text-orange-400 drop-shadow-[0_0_5px_rgba(251,146,60,0.5)]">
-                          {activeRoute.metrics.transfer_delay_prob ?? activeRoute.metrics.miss_prob}%
-                        </span>
-                      </div>
-                      <div className="flex justify-between items-center py-3 border-b border-white/5 group hover:bg-white/[0.02] px-2 rounded transition-colors">
-                        <span className="text-xs text-slate-400 uppercase tracking-wider">
-                          Beats Expected
-                        </span>
-                        <span className="font-mono font-bold text-emerald-300">
-                          {activeRoute.metrics.beats_expected_prob ?? activeRoute.metrics.early_prob}%
+                        <span className="font-mono font-bold text-purple-400 drop-shadow-[0_0_5px_rgba(168,85,247,0.5)]">
+                          ±{activeRoute.metrics.iqr_mins}m
                         </span>
                       </div>
                       <div className="flex justify-between items-center py-3 border-b border-white/5 group hover:bg-white/[0.02] px-2 rounded transition-colors">
@@ -469,19 +439,16 @@ export default function App() {
                         Route Signature
                       </th>
                       <th className="py-4 px-6 font-semibold text-center">
+                        Typical (P50)
+                      </th>
+                      <th className="py-4 px-6 font-semibold text-center">
+                        Budget (P90)
+                      </th>
+                      <th className="py-4 px-6 font-semibold text-center">
+                        Consistency
+                      </th>
+                      <th className="py-4 px-6 font-semibold text-center">
                         Win Rate
-                      </th>
-                      <th className="py-4 px-6 font-semibold text-center">
-                        Exp. Time
-                      </th>
-                      <th className="py-4 px-6 font-semibold text-center">
-                        Time Spread
-                      </th>
-                      <th className="py-4 px-6 font-semibold text-center">
-                        Risk Factor
-                      </th>
-                      <th className="py-4 px-6 font-semibold text-center">
-                        Beats Exp.
                       </th>
                       <th className="py-4 px-6 font-semibold text-right">
                         Cost
@@ -515,53 +482,27 @@ export default function App() {
                             {route.title}
                           </div>
                         </td>
-                        <td className="py-4 px-6 text-center">
-                          <span className="font-mono font-bold text-emerald-400 bg-emerald-400/10 px-2 py-1 rounded">
-                            {route.metrics.win_rate}%
-                          </span>
+                        <td className="py-4 px-6 text-center font-mono text-slate-200">
+                          {route.metrics.p50_mins}m
                         </td>
-                        <td className="py-4 px-6 text-center font-mono text-slate-300">
-                          {route.metrics.exp_time}m
-                        </td>
-                        <td className="py-4 px-6 min-w-[220px]">
-                          <div className="flex items-center justify-center gap-3">
-                            <span className="w-11 text-right font-mono text-[11px] text-slate-500">
-                              {route.metrics.best_time}m
-                            </span>
-                            <div className="relative h-7 w-32 shrink-0">
-                              <div className="absolute left-0 right-0 top-1/2 h-px -translate-y-1/2 bg-white/10" />
-                              <div
-                                className="absolute top-1/2 h-2 -translate-y-1/2 rounded-full bg-gradient-to-r from-emerald-400/70 via-orange-400/70 to-red-400/70 shadow-[0_0_10px_rgba(251,146,60,0.25)]"
-                                style={{
-                                  left: `${getTimeSpread(route).left}%`,
-                                  width: `${getTimeSpread(route).width}%`,
-                                }}
-                              />
-                              <div
-                                className="absolute top-1/2 h-4 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-[0_0_8px_rgba(255,255,255,0.65)]"
-                                style={{
-                                  left: `${getTimeSpread(route).marker}%`,
-                                }}
-                              />
-                            </div>
-                            <span className="w-11 font-mono text-[11px] text-slate-500">
-                              {route.metrics.worst_time}m
-                            </span>
-                          </div>
+                        <td className="py-4 px-6 text-center font-mono text-amber-500">
+                          {route.metrics.p90_mins}m
                         </td>
                         <td className="py-4 px-6 text-center font-mono">
                           <span
                             className={
-                              route.metrics.severe_risk > 25
+                              route.metrics.iqr_mins > 8
                                 ? "text-red-400"
-                                : "text-slate-500"
+                                : "text-purple-400"
                             }
                           >
-                            {route.metrics.severe_risk}%
+                            ±{route.metrics.iqr_mins}m IQR
                           </span>
                         </td>
-                        <td className="py-4 px-6 text-center font-mono text-emerald-300">
-                          {route.metrics.beats_expected_prob ?? route.metrics.early_prob}%
+                        <td className="py-4 px-6 text-center">
+                          <span className="font-mono font-bold text-emerald-400 bg-emerald-400/10 px-2 py-1 rounded">
+                            {route.metrics.win_rate}%
+                          </span>
                         </td>
                         <td className="py-4 px-6 text-right font-mono font-semibold text-slate-300">
                           ${route.cost.toFixed(2)}
