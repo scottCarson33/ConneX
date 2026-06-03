@@ -490,15 +490,17 @@ def run_competitive_simulation(
     for r in itineraries:
         route_index = r["route_index"]
         durations = all_durations[route_index]
-        expected_time = r["baseline_mins"]
+        expected_time = sum(durations) / num_trials
         early_count = sum(1 for duration in durations if duration < expected_time)
+        early_prob = round((early_count / num_trials) * 100, 1)
         results[route_index] = {
             "win_rate": round((win_counts[r["route_index"]] / num_trials) * 100, 1),
             "severe_risk": round((severe_delays[route_index] / num_trials) * 100, 1),
             "transfer_delay_prob": round((delayed_transfers[route_index] / num_trials) * 100, 1),
             "miss_prob": round((delayed_transfers[route_index] / num_trials) * 100, 1),
-            "early_prob": round((early_count / num_trials) * 100, 1),
-            "exp_time": round(sum(durations) / num_trials, 1),
+            "beats_expected_prob": early_prob,
+            "early_prob": early_prob,
+            "exp_time": round(expected_time, 1),
             "best_time": round(min(durations), 1),
             "worst_time": round(max(durations), 1)
         }

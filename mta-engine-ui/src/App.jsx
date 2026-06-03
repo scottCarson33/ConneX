@@ -90,6 +90,32 @@ export default function App() {
     setActiveRouteIdx((prev) => (prev - 1 + results.length) % results.length);
 
   const activeRoute = results[activeRouteIdx];
+  const timeBounds =
+    results.length > 0
+      ? results.reduce(
+          (bounds, route) => ({
+            min: Math.min(bounds.min, route.metrics.best_time),
+            max: Math.max(bounds.max, route.metrics.worst_time),
+          }),
+          { min: Infinity, max: -Infinity },
+        )
+      : { min: 0, max: 1 };
+  const timeSpan = Math.max(timeBounds.max - timeBounds.min, 1);
+  const clampPercent = (value) => Math.max(0, Math.min(100, value));
+  const getTimeSpread = (route) => {
+    const best = route.metrics.best_time;
+    const worst = route.metrics.worst_time;
+    const expected = route.metrics.exp_time;
+    const left = clampPercent(((best - timeBounds.min) / timeSpan) * 100);
+    const right = clampPercent(((worst - timeBounds.min) / timeSpan) * 100);
+    const marker = clampPercent(((expected - timeBounds.min) / timeSpan) * 100);
+
+    return {
+      left,
+      width: Math.max(right - left, 2),
+      marker,
+    };
+  };
 
   return (
     <div className="min-h-screen bg-[#030305] text-slate-100 font-sans antialiased relative overflow-x-hidden selection:bg-orange-500/30">
@@ -399,7 +425,7 @@ export default function App() {
                           Beats Expected
                         </span>
                         <span className="font-mono font-bold text-emerald-300">
-                          {activeRoute.metrics.early_prob}%
+                          {activeRoute.metrics.beats_expected_prob ?? activeRoute.metrics.early_prob}%
                         </span>
                       </div>
                       <div className="flex justify-between items-center py-3 border-b border-white/5 group hover:bg-white/[0.02] px-2 rounded transition-colors">
@@ -449,6 +475,9 @@ export default function App() {
                         Exp. Time
                       </th>
                       <th className="py-4 px-6 font-semibold text-center">
+                        Time Spread
+                      </th>
+                      <th className="py-4 px-6 font-semibold text-center">
                         Risk Factor
                       </th>
                       <th className="py-4 px-6 font-semibold text-center">
@@ -494,6 +523,32 @@ export default function App() {
                         <td className="py-4 px-6 text-center font-mono text-slate-300">
                           {route.metrics.exp_time}m
                         </td>
+                        <td className="py-4 px-6 min-w-[220px]">
+                          <div className="flex items-center justify-center gap-3">
+                            <span className="w-11 text-right font-mono text-[11px] text-slate-500">
+                              {route.metrics.best_time}m
+                            </span>
+                            <div className="relative h-7 w-32 shrink-0">
+                              <div className="absolute left-0 right-0 top-1/2 h-px -translate-y-1/2 bg-white/10" />
+                              <div
+                                className="absolute top-1/2 h-2 -translate-y-1/2 rounded-full bg-gradient-to-r from-emerald-400/70 via-orange-400/70 to-red-400/70 shadow-[0_0_10px_rgba(251,146,60,0.25)]"
+                                style={{
+                                  left: `${getTimeSpread(route).left}%`,
+                                  width: `${getTimeSpread(route).width}%`,
+                                }}
+                              />
+                              <div
+                                className="absolute top-1/2 h-4 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-[0_0_8px_rgba(255,255,255,0.65)]"
+                                style={{
+                                  left: `${getTimeSpread(route).marker}%`,
+                                }}
+                              />
+                            </div>
+                            <span className="w-11 font-mono text-[11px] text-slate-500">
+                              {route.metrics.worst_time}m
+                            </span>
+                          </div>
+                        </td>
                         <td className="py-4 px-6 text-center font-mono">
                           <span
                             className={
@@ -506,7 +561,7 @@ export default function App() {
                           </span>
                         </td>
                         <td className="py-4 px-6 text-center font-mono text-emerald-300">
-                          {route.metrics.early_prob}%
+                          {route.metrics.beats_expected_prob ?? route.metrics.early_prob}%
                         </td>
                         <td className="py-4 px-6 text-right font-mono font-semibold text-slate-300">
                           ${route.cost.toFixed(2)}
