@@ -51,7 +51,6 @@ ALTERNATIVE_GROUPS = {
 }
 
 # Average headways in minutes for [peak, midday, evening, overnight]
-# None means the line does not run at that time.
 HEADWAY_DATA = {
     "A": {"peak": 5.0, "midday": 8.0, "evening": 10.0, "overnight": 20.0},
     "C": {"peak": 6.0, "midday": 10.0, "evening": 12.0, "overnight": None},
@@ -66,12 +65,10 @@ HEADWAY_DATA = {
     "3": {"peak": 6.0, "midday": 8.0, "evening": 10.0, "overnight": None},
     "J": {"peak": 5.0, "midday": 8.0, "evening": 10.0, "overnight": 20.0},
     "Z": {"peak": 5.0, "midday": None, "evening": None, "overnight": None},
-    # Fallback default
     "DEFAULT": {"peak": 6.0, "midday": 10.0, "evening": 12.0, "overnight": 20.0}
 }
 
 def clean_stop_name(stop_name: str) -> str:
-    # Basic normalization to improve matching
     s = stop_name.replace("Station", "").strip()
     s = s.replace(" - ", "-").replace(" / ", "/").replace(" /", "/").replace("/ ", "/")
     return s
@@ -84,35 +81,24 @@ def is_stop_in_list(target: str, stop_list: List[str]) -> bool:
     return False
 
 def find_alternatives(line_id: str, departure_stop: str, arrival_stop: Optional[str]) -> List[str]:
-    """
-    Returns a list of alternative subway lines that serve both the departure and arrival stop.
-    Includes the original line_id in the result if valid.
-    """
     if not line_id or not departure_stop or not arrival_stop:
         return [line_id] if line_id else []
 
-    clean_line = line_id.strip()[0] # e.g. "A Train" -> "A"
-    
+    clean_line = line_id.strip()[0]
     alternatives = [clean_line]
-    
+
     for group_name, group_data in ALTERNATIVE_GROUPS.items():
         if clean_line in group_data["lines"]:
-            # Check if both departure and arrival stops are in the shared list
             dep_valid = is_stop_in_list(departure_stop, group_data["shared_stops"])
             arr_valid = is_stop_in_list(arrival_stop, group_data["shared_stops"])
-            
             if dep_valid and arr_valid:
                 for alt_line in group_data["lines"]:
                     if alt_line not in alternatives:
                         alternatives.append(alt_line)
-            break # Found the group
-
+            break
     return alternatives
 
 def get_headway(line_id: str, time_of_day: str = "peak") -> Optional[float]:
-    """
-    Returns average headway in minutes. time_of_day is one of: 'peak', 'midday', 'evening', 'overnight'.
-    """
     clean_line = line_id.strip()[0]
     data = HEADWAY_DATA.get(clean_line, HEADWAY_DATA["DEFAULT"])
     return data.get(time_of_day)

@@ -14,14 +14,13 @@ import {
   Cpu,
   Wifi,
   Clock,
-  Terminal,
-  CalendarDays,
+  Timer,
 } from "lucide-react";
 
 export default function App() {
   const [origin, setOrigin] = useState("");
   const [destination, setDestination] = useState("");
-  const [departureTime, setDepartureTime] = useState("");
+  const [offsetMins, setOffsetMins] = useState(0);
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState([]);
   const [runStartTime, setRunStartTime] = useState(null);
@@ -39,11 +38,7 @@ export default function App() {
     setActiveRouteIdx(0);
 
     try {
-      let isoDeparture = null;
-      if (departureTime) {
-        // Convert local datetime-local input to UTC ISO String
-        isoDeparture = new Date(departureTime).toISOString();
-      }
+      const parsedOffset = parseInt(offsetMins, 10) || 0;
 
       const res = await fetch(`${API_BASE_URL}/api/simulate`, {
         method: "POST",
@@ -51,7 +46,7 @@ export default function App() {
         body: JSON.stringify({
           origin,
           destination,
-          departure_time: isoDeparture,
+          offset_mins: parsedOffset,
         }),
       });
 
@@ -99,7 +94,7 @@ export default function App() {
 
   const activeRoute = results[activeRouteIdx];
 
-  // Helper to find the maximum visual bound for the Spread Graph
+  // Helper to find maximum bound for the chart domain
   const MAX_CHART_MINS =
     results.length > 0
       ? Math.max(...results.map((r) => r.metrics.worst_time)) + 5
@@ -149,7 +144,7 @@ export default function App() {
             <div className="flex items-center justify-center md:justify-start gap-3 mb-3 animate-fade">
               <Cpu className="w-5 h-5 text-orange-500" />
               <span className="text-[10px] font-mono tracking-[0.2em] text-orange-500 uppercase border border-orange-500/30 bg-orange-500/10 px-3 py-1 rounded">
-                V9.1 Stochastic Matrix
+                V9.2 Stochastic Matrix
               </span>
             </div>
             <h1 className="text-5xl md:text-6xl font-black tracking-tighter text-white uppercase drop-shadow-2xl animate-slide-up">
@@ -229,15 +224,17 @@ export default function App() {
 
             <div className="md:col-span-2 relative group">
               <label className="block text-[10px] font-mono uppercase tracking-widest text-slate-400 mb-2 ml-1">
-                Departure Time
+                Departure Offset
               </label>
               <div className="relative">
-                <CalendarDays className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
+                <Timer className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
                 <input
-                  type="datetime-local"
-                  className="w-full bg-[#050508] border border-white/10 rounded-xl py-3.5 pl-11 pr-2 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 text-white placeholder-slate-600 transition-all font-medium text-xs md:text-sm appearance-none"
-                  value={departureTime}
-                  onChange={(e) => setDepartureTime(e.target.value)}
+                  type="number"
+                  min="0"
+                  className="w-full bg-[#050508] border border-white/10 rounded-xl py-3.5 pl-11 pr-4 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 text-white placeholder-slate-600 transition-all font-medium"
+                  placeholder="Mins (e.g., 14)"
+                  value={offsetMins}
+                  onChange={(e) => setOffsetMins(e.target.value)}
                 />
               </div>
             </div>
@@ -272,11 +269,11 @@ export default function App() {
         {results.length > 0 && (
           <div className="space-y-8 animate-slide-up">
             {runStartTime && (
-              <div className="bg-orange-950/20 border border-orange-500/30 rounded-lg px-4 py-3 flex items-center gap-3 backdrop-blur-md animate-fade">
-                <Clock className="w-5 h-5 text-orange-500" />
-                <span className="text-xs text-slate-300 uppercase tracking-widest font-mono">
-                  Target Departure Base:{" "}
-                  <span className="text-white font-bold ml-1">
+              <div className="bg-[#0c0d16]/80 border border-orange-500/30 rounded-lg px-4 py-3 flex items-center gap-3 backdrop-blur-md animate-fade">
+                <Clock className="w-4 h-4 text-orange-500" />
+                <span className="text-xs text-slate-400 uppercase tracking-widest font-mono">
+                  Base Sim Departure Clock:{" "}
+                  <span className="text-slate-200 font-bold ml-1">
                     {runStartTime}
                   </span>
                 </span>
@@ -457,6 +454,9 @@ export default function App() {
                       <th className="py-4 px-6 font-semibold text-center">
                         Typical (P50)
                       </th>
+                      <th className="py-4 px-6 font-semibold text-center">
+                        Budget (P90)
+                      </th>
                       <th className="py-4 px-6 font-semibold text-center hidden md:table-cell">
                         Time Spread (Min → Max)
                       </th>
@@ -470,7 +470,6 @@ export default function App() {
                   </thead>
                   <tbody className="divide-y divide-white/5">
                     {results.map((route, idx) => {
-                      // Calculate positions for the visual spread bar
                       const bestPct = Math.min(
                         (route.metrics.best_time / MAX_CHART_MINS) * 100,
                         100,
@@ -526,15 +525,16 @@ export default function App() {
                           <td className="py-4 px-6 text-center font-mono text-slate-200">
                             {route.metrics.p50_mins}m
                           </td>
+                          <td className="py-4 px-6 text-center font-mono text-amber-500">
+                            {route.metrics.p90_mins}m
+                          </td>
 
-                          {/* VISUAL SPREAD BAR */}
                           <td className="py-4 px-6 w-48 hidden md:table-cell">
                             <div className="flex items-center gap-2">
                               <span className="text-[10px] font-mono text-slate-500 w-6 text-right">
                                 {route.metrics.best_time.toFixed(0)}
                               </span>
                               <div className="relative w-full h-1.5 bg-white/5 rounded-full overflow-visible">
-                                {/* Total Bounds (Best to Worst) */}
                                 <div
                                   className="absolute h-full bg-slate-600/50 rounded-full"
                                   style={{
@@ -542,7 +542,6 @@ export default function App() {
                                     right: `${100 - worstPct}%`,
                                   }}
                                 />
-                                {/* IQR Predictability Zone (P25 to P75) */}
                                 <div
                                   className={`absolute h-1.5 top-0 rounded-full ${route.metrics.severe_risk > 25 ? "bg-gradient-to-r from-orange-500 to-red-500" : "bg-gradient-to-r from-emerald-500 to-orange-400"}`}
                                   style={{
@@ -550,7 +549,6 @@ export default function App() {
                                     right: `${100 - p75Pct}%`,
                                   }}
                                 />
-                                {/* Median P50 Marker */}
                                 <div
                                   className="absolute w-1 h-3 bg-white rounded-sm -top-[3px] shadow-[0_0_5px_rgba(255,255,255,0.8)]"
                                   style={{
