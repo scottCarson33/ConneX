@@ -15,11 +15,13 @@ import {
   Wifi,
   Clock,
   Terminal,
+  CalendarDays,
 } from "lucide-react";
 
 export default function App() {
   const [origin, setOrigin] = useState("");
   const [destination, setDestination] = useState("");
+  const [departureTime, setDepartureTime] = useState("");
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState([]);
   const [runStartTime, setRunStartTime] = useState(null);
@@ -37,10 +39,20 @@ export default function App() {
     setActiveRouteIdx(0);
 
     try {
+      let isoDeparture = null;
+      if (departureTime) {
+        // Convert local datetime-local input to UTC ISO String
+        isoDeparture = new Date(departureTime).toISOString();
+      }
+
       const res = await fetch(`${API_BASE_URL}/api/simulate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ origin, destination }),
+        body: JSON.stringify({
+          origin,
+          destination,
+          departure_time: isoDeparture,
+        }),
       });
 
       if (!res.ok)
@@ -50,7 +62,6 @@ export default function App() {
 
       if (data.status === "success") {
         setRunStartTime(data.run_start_time);
-        // Sort by Win Rate highest first
         const sorted = data.data.sort(
           (a, b) => b.metrics.win_rate - a.metrics.win_rate,
         );
@@ -81,12 +92,6 @@ export default function App() {
     );
   };
 
-  const getStepTitle = (step) => {
-    if (step.mode === "WALK") return "Pedestrian Vector";
-    if (step.mode === "DOCKING_OVERHEAD") return "Docking Protocol";
-    return step.line_display;
-  };
-
   const nextRoute = () =>
     setActiveRouteIdx((prev) => (prev + 1) % results.length);
   const prevRoute = () =>
@@ -94,12 +99,15 @@ export default function App() {
 
   const activeRoute = results[activeRouteIdx];
 
+  // Helper to find the maximum visual bound for the Spread Graph
+  const MAX_CHART_MINS =
+    results.length > 0
+      ? Math.max(...results.map((r) => r.metrics.worst_time)) + 5
+      : 120;
+
   return (
     <div className="min-h-screen bg-[#030305] text-slate-100 font-sans antialiased relative overflow-x-hidden selection:bg-orange-500/30">
-      {/* Animated Background Grid */}
       <div className="fixed inset-0 bg-grid pointer-events-none z-0 opacity-50" />
-
-      {/* Ambient Top Glow */}
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[300px] bg-orange-600/10 blur-[120px] rounded-full pointer-events-none z-0" />
 
       {/* TOP LIVE STATUS TICKER */}
@@ -136,7 +144,6 @@ export default function App() {
       </div>
 
       <div className="relative z-10 max-w-6xl mx-auto p-4 md:p-8 pt-10">
-        {/* HERO HEADER */}
         <header className="mb-12 text-center md:text-left flex flex-col md:flex-row md:items-end justify-between gap-6">
           <div>
             <div className="flex items-center justify-center md:justify-start gap-3 mb-3 animate-fade">
@@ -182,7 +189,7 @@ export default function App() {
           style={{ animationDelay: "0.1s" }}
         >
           <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
-            <div className="md:col-span-5 relative group">
+            <div className="md:col-span-4 relative group">
               <label className="block text-[10px] font-mono uppercase tracking-widest text-slate-400 mb-2 ml-1">
                 Origin Node
               </label>
@@ -203,7 +210,7 @@ export default function App() {
               <ArrowRight className="w-5 h-5 text-slate-600" />
             </div>
 
-            <div className="md:col-span-4 relative group">
+            <div className="md:col-span-3 relative group">
               <label className="block text-[10px] font-mono uppercase tracking-widest text-slate-400 mb-2 ml-1">
                 Destination Node
               </label>
@@ -220,6 +227,21 @@ export default function App() {
               </div>
             </div>
 
+            <div className="md:col-span-2 relative group">
+              <label className="block text-[10px] font-mono uppercase tracking-widest text-slate-400 mb-2 ml-1">
+                Departure Time
+              </label>
+              <div className="relative">
+                <CalendarDays className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
+                <input
+                  type="datetime-local"
+                  className="w-full bg-[#050508] border border-white/10 rounded-xl py-3.5 pl-11 pr-2 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 text-white placeholder-slate-600 transition-all font-medium text-xs md:text-sm appearance-none"
+                  value={departureTime}
+                  onChange={(e) => setDepartureTime(e.target.value)}
+                />
+              </div>
+            </div>
+
             <div className="md:col-span-2">
               <button
                 type="submit"
@@ -228,7 +250,7 @@ export default function App() {
               >
                 {loading ? (
                   <span className="flex items-center gap-2">
-                    <Cpu className="w-4 h-4 animate-spin" /> Computing...
+                    <Cpu className="w-4 h-4 animate-spin" /> Computing
                   </span>
                 ) : (
                   <>Run Engine</>
@@ -238,7 +260,6 @@ export default function App() {
           </div>
         </form>
 
-        {/* ERROR ALERT */}
         {error && (
           <div className="animate-slide-up bg-red-950/40 border border-red-500/30 text-red-200 p-4 rounded-xl mb-8 flex items-center gap-4 shadow-lg backdrop-blur-md">
             <div className="bg-red-500/20 p-2 rounded-lg">
@@ -248,23 +269,20 @@ export default function App() {
           </div>
         )}
 
-        {/* RESULTS DASHBOARD */}
         {results.length > 0 && (
           <div className="space-y-8 animate-slide-up">
-            {/* RUN TIMESTAMP BANNER */}
             {runStartTime && (
-              <div className="bg-[#0c0d16]/80 border border-orange-500/30 rounded-lg px-4 py-3 flex items-center gap-3 backdrop-blur-md animate-fade">
-                <Terminal className="w-4 h-4 text-orange-500" />
-                <span className="text-xs text-slate-400 uppercase tracking-widest font-mono">
-                  Simulation Executed:{" "}
-                  <span className="text-slate-200 font-bold ml-1">
+              <div className="bg-orange-950/20 border border-orange-500/30 rounded-lg px-4 py-3 flex items-center gap-3 backdrop-blur-md animate-fade">
+                <Clock className="w-5 h-5 text-orange-500" />
+                <span className="text-xs text-slate-300 uppercase tracking-widest font-mono">
+                  Target Departure Base:{" "}
+                  <span className="text-white font-bold ml-1">
                     {runStartTime}
                   </span>
                 </span>
               </div>
             )}
 
-            {/* HERO CAROUSEL */}
             <div className="glass-panel rounded-2xl overflow-hidden shadow-2xl shadow-black">
               <div className="bg-white/[0.02] px-6 py-4 border-b border-white/5 flex items-center justify-between">
                 <div className="flex items-center gap-4">
@@ -298,15 +316,11 @@ export default function App() {
                 key={activeRouteIdx}
                 className="p-6 md:p-8 grid grid-cols-1 lg:grid-cols-12 gap-10 animate-fade"
               >
-                {/* Itinerary Column */}
                 <div className="lg:col-span-7">
                   <div className="mb-8">
                     <h3 className="text-3xl font-black text-white tracking-tight mb-2 drop-shadow-md">
                       {activeRoute.title}
                     </h3>
-                    <p className="text-sm text-slate-400 font-mono border-l-2 border-orange-500 pl-3">
-                      {activeRoute.explanation}
-                    </p>
                   </div>
 
                   <div className="relative border-l-2 border-[#1f202e] ml-4 space-y-6">
@@ -321,7 +335,7 @@ export default function App() {
                             </div>
                             <div>
                               <span className="font-bold text-slate-100 text-sm block">
-                                {getStepTitle(step)}
+                                {step.line_display}
                               </span>
                               {step.departure_stop !== "N/A" && (
                                 <span className="text-slate-500 font-mono text-[11px] mt-1 block">
@@ -347,7 +361,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Telemetry Column */}
                 <div className="lg:col-span-5">
                   <div className="bg-[#050508] rounded-2xl p-6 border border-white/10 shadow-inner h-full flex flex-col relative overflow-hidden">
                     <Activity className="absolute -right-10 -bottom-10 w-48 h-48 text-white/[0.02] pointer-events-none" />
@@ -422,7 +435,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* MATRIX ANALYTICS TABLE */}
+            {/* MATRIX ANALYTICS TABLE WITH VISUAL SPREAD */}
             <div className="glass-panel rounded-2xl overflow-hidden shadow-2xl mt-8">
               <div className="px-6 py-5 border-b border-white/5 bg-black/40">
                 <h3 className="text-xs font-bold uppercase tracking-widest text-slate-300 font-mono flex items-center gap-3">
@@ -439,16 +452,16 @@ export default function App() {
                         Route Signature
                       </th>
                       <th className="py-4 px-6 font-semibold text-center">
+                        Win Rate
+                      </th>
+                      <th className="py-4 px-6 font-semibold text-center">
                         Typical (P50)
                       </th>
-                      <th className="py-4 px-6 font-semibold text-center">
-                        Budget (P90)
+                      <th className="py-4 px-6 font-semibold text-center hidden md:table-cell">
+                        Time Spread (Min → Max)
                       </th>
                       <th className="py-4 px-6 font-semibold text-center">
-                        Consistency
-                      </th>
-                      <th className="py-4 px-6 font-semibold text-center">
-                        Win Rate
+                        Severe Risk
                       </th>
                       <th className="py-4 px-6 font-semibold text-right">
                         Cost
@@ -456,59 +469,119 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/5">
-                    {results.map((route, idx) => (
-                      <tr
-                        key={idx}
-                        onClick={() => setActiveRouteIdx(idx)}
-                        className={`cursor-pointer transition-all duration-200 ${
-                          idx === activeRouteIdx
-                            ? "bg-orange-500/10 border-l-2 border-l-orange-500"
-                            : "hover:bg-white/[0.03] border-l-2 border-l-transparent"
-                        }`}
-                      >
-                        <td className="py-4 px-6">
-                          {idx === 0 ? (
-                            <span className="bg-emerald-500/20 text-emerald-400 font-mono text-[10px] px-2 py-1 rounded border border-emerald-500/30 font-bold">
-                              OPTIMAL
+                    {results.map((route, idx) => {
+                      // Calculate positions for the visual spread bar
+                      const bestPct = Math.min(
+                        (route.metrics.best_time / MAX_CHART_MINS) * 100,
+                        100,
+                      );
+                      const worstPct = Math.min(
+                        (route.metrics.worst_time / MAX_CHART_MINS) * 100,
+                        100,
+                      );
+                      const p25Pct = Math.min(
+                        (route.metrics.p25_mins / MAX_CHART_MINS) * 100,
+                        100,
+                      );
+                      const p75Pct = Math.min(
+                        (route.metrics.p75_mins / MAX_CHART_MINS) * 100,
+                        100,
+                      );
+                      const p50Pct = Math.min(
+                        (route.metrics.p50_mins / MAX_CHART_MINS) * 100,
+                        100,
+                      );
+
+                      return (
+                        <tr
+                          key={idx}
+                          onClick={() => setActiveRouteIdx(idx)}
+                          className={`cursor-pointer transition-all duration-200 ${
+                            idx === activeRouteIdx
+                              ? "bg-orange-500/10 border-l-2 border-l-orange-500"
+                              : "hover:bg-white/[0.03] border-l-2 border-l-transparent"
+                          }`}
+                        >
+                          <td className="py-4 px-6">
+                            {idx === 0 ? (
+                              <span className="bg-emerald-500/20 text-emerald-400 font-mono text-[10px] px-2 py-1 rounded border border-emerald-500/30 font-bold">
+                                OPTIMAL
+                              </span>
+                            ) : (
+                              <span className="font-mono text-slate-500 font-bold ml-2">
+                                #{idx + 1}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-4 px-6">
+                            <div className="font-sans font-bold text-slate-200 truncate max-w-[200px] sm:max-w-xs lg:max-w-md">
+                              {route.title}
+                            </div>
+                          </td>
+                          <td className="py-4 px-6 text-center">
+                            <span className="font-mono font-bold text-emerald-400 bg-emerald-400/10 px-2 py-1 rounded">
+                              {route.metrics.win_rate}%
                             </span>
-                          ) : (
-                            <span className="font-mono text-slate-500 font-bold ml-2">
-                              #{idx + 1}
+                          </td>
+                          <td className="py-4 px-6 text-center font-mono text-slate-200">
+                            {route.metrics.p50_mins}m
+                          </td>
+
+                          {/* VISUAL SPREAD BAR */}
+                          <td className="py-4 px-6 w-48 hidden md:table-cell">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] font-mono text-slate-500 w-6 text-right">
+                                {route.metrics.best_time.toFixed(0)}
+                              </span>
+                              <div className="relative w-full h-1.5 bg-white/5 rounded-full overflow-visible">
+                                {/* Total Bounds (Best to Worst) */}
+                                <div
+                                  className="absolute h-full bg-slate-600/50 rounded-full"
+                                  style={{
+                                    left: `${bestPct}%`,
+                                    right: `${100 - worstPct}%`,
+                                  }}
+                                />
+                                {/* IQR Predictability Zone (P25 to P75) */}
+                                <div
+                                  className={`absolute h-1.5 top-0 rounded-full ${route.metrics.severe_risk > 25 ? "bg-gradient-to-r from-orange-500 to-red-500" : "bg-gradient-to-r from-emerald-500 to-orange-400"}`}
+                                  style={{
+                                    left: `${p25Pct}%`,
+                                    right: `${100 - p75Pct}%`,
+                                  }}
+                                />
+                                {/* Median P50 Marker */}
+                                <div
+                                  className="absolute w-1 h-3 bg-white rounded-sm -top-[3px] shadow-[0_0_5px_rgba(255,255,255,0.8)]"
+                                  style={{
+                                    left: `${p50Pct}%`,
+                                    transform: "translateX(-50%)",
+                                  }}
+                                />
+                              </div>
+                              <span className="text-[10px] font-mono text-slate-500 w-6">
+                                {route.metrics.worst_time.toFixed(0)}
+                              </span>
+                            </div>
+                          </td>
+
+                          <td className="py-4 px-6 text-center font-mono">
+                            <span
+                              className={
+                                route.metrics.severe_risk > 25
+                                  ? "text-red-400 font-bold drop-shadow-[0_0_5px_rgba(248,113,113,0.5)]"
+                                  : "text-slate-400"
+                              }
+                            >
+                              {route.metrics.severe_risk}%
                             </span>
-                          )}
-                        </td>
-                        <td className="py-4 px-6">
-                          <div className="font-sans font-bold text-slate-200 truncate max-w-[200px] sm:max-w-xs lg:max-w-md">
-                            {route.title}
-                          </div>
-                        </td>
-                        <td className="py-4 px-6 text-center font-mono text-slate-200">
-                          {route.metrics.p50_mins}m
-                        </td>
-                        <td className="py-4 px-6 text-center font-mono text-amber-500">
-                          {route.metrics.p90_mins}m
-                        </td>
-                        <td className="py-4 px-6 text-center font-mono">
-                          <span
-                            className={
-                              route.metrics.iqr_mins > 8
-                                ? "text-red-400"
-                                : "text-purple-400"
-                            }
-                          >
-                            ±{route.metrics.iqr_mins}m IQR
-                          </span>
-                        </td>
-                        <td className="py-4 px-6 text-center">
-                          <span className="font-mono font-bold text-emerald-400 bg-emerald-400/10 px-2 py-1 rounded">
-                            {route.metrics.win_rate}%
-                          </span>
-                        </td>
-                        <td className="py-4 px-6 text-right font-mono font-semibold text-slate-300">
-                          ${route.cost.toFixed(2)}
-                        </td>
-                      </tr>
-                    ))}
+                          </td>
+                          <td className="py-4 px-6 text-right font-mono font-semibold text-slate-300">
+                            ${route.cost.toFixed(2)}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

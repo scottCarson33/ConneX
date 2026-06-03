@@ -76,6 +76,7 @@ app.add_middleware(
 class SimulationRequest(BaseModel):
     origin: str
     destination: str
+    departure_time: Optional[str] = None  # ISO8601 String
 
 def clean_line_id(line_id: str) -> str:
     token = str(line_id or "").upper().strip().split()[0]
@@ -247,10 +248,10 @@ def inject_citibike_alternative(base_itinerary: Dict) -> Optional[Dict]:
 
         cycling_duration = pre_rail_mins * 1.4
         new_steps = [
-            {"mode": "WALK", "baseline_duration": CITIBIKE_WALK_TO_STATION, "line_id": "Walk", "departure_stop": "Origin", "arrival_stop": "Citi Bike Station"},
-            {"mode": "CITIBIKE", "baseline_duration": cycling_duration, "line_id": "Citi Bike", "departure_stop": "Citi Bike Station", "arrival_stop": rail_step["departure_stop"]},
-            {"mode": "DOCKING_OVERHEAD", "baseline_duration": CITIBIKE_UNLOCK_DOCK_TIME, "line_id": "Docking Overhead", "departure_stop": "Docking Hub", "arrival_stop": "Docking Hub"},
-            {"mode": "WALK", "baseline_duration": 2.0, "line_id": "Walk", "departure_stop": "Docking Hub", "arrival_stop": rail_step["departure_stop"]}
+            {"mode": "WALK", "baseline_duration": CITIBIKE_WALK_TO_STATION, "line_id": "Walk", "departure_stop": "Origin", "arrival_stop": "Citi Bike Station", "line_display": "Walk to Station"},
+            {"mode": "CITIBIKE", "baseline_duration": cycling_duration, "line_id": "Citi Bike", "departure_stop": "Citi Bike Station", "arrival_stop": rail_step["departure_stop"], "line_display": "Citi Bike Ride"},
+            {"mode": "DOCKING_OVERHEAD", "baseline_duration": CITIBIKE_UNLOCK_DOCK_TIME, "line_id": "Docking Overhead", "departure_stop": "Docking Hub", "arrival_stop": "Docking Hub", "line_display": "Dock Bike"},
+            {"mode": "WALK", "baseline_duration": 2.0, "line_id": "Walk", "departure_stop": "Docking Hub", "arrival_stop": rail_step["departure_stop"], "line_display": "Walk to Station"}
         ]
         new_steps.extend(steps[rail_idx:])
     else:
@@ -261,10 +262,10 @@ def inject_citibike_alternative(base_itinerary: Dict) -> Optional[Dict]:
         if cycling_duration > 120.0 or cycling_duration == 0: return None
 
         new_steps = [
-            {"mode": "WALK", "baseline_duration": CITIBIKE_WALK_TO_STATION, "line_id": "Walk", "departure_stop": "Origin Location", "arrival_stop": "Nearest Citi Bike Station"},
-            {"mode": "CITIBIKE", "baseline_duration": cycling_duration, "line_id": "Citi Bike", "departure_stop": "Nearest Citi Bike Station", "arrival_stop": "Destination Docking Station"},
-            {"mode": "DOCKING_OVERHEAD", "baseline_duration": CITIBIKE_UNLOCK_DOCK_TIME, "line_id": "Docking Overhead", "departure_stop": "Destination Docking Station", "arrival_stop": "Destination Docking Station"},
-            {"mode": "WALK", "baseline_duration": CITIBIKE_WALK_TO_DESTINATION, "line_id": "Walk", "departure_stop": "Destination Docking Station", "arrival_stop": "Destination Address"}
+            {"mode": "WALK", "baseline_duration": CITIBIKE_WALK_TO_STATION, "line_id": "Walk", "departure_stop": "Origin Location", "arrival_stop": "Nearest Citi Bike Station", "line_display": "Walk to Origin Dock"},
+            {"mode": "CITIBIKE", "baseline_duration": cycling_duration, "line_id": "Citi Bike", "departure_stop": "Nearest Citi Bike Station", "arrival_stop": "Destination Docking Station", "line_display": "Citi Bike Ride"},
+            {"mode": "DOCKING_OVERHEAD", "baseline_duration": CITIBIKE_UNLOCK_DOCK_TIME, "line_id": "Docking Overhead", "departure_stop": "Destination Docking Station", "arrival_stop": "Destination Docking Station", "line_display": "Dock Bike"},
+            {"mode": "WALK", "baseline_duration": CITIBIKE_WALK_TO_DESTINATION, "line_id": "Walk", "departure_stop": "Destination Docking Station", "arrival_stop": "Destination Address", "line_display": "Walk to Destination"}
         ]
 
     return {
@@ -275,13 +276,21 @@ def inject_citibike_alternative(base_itinerary: Dict) -> Optional[Dict]:
         "explanation": generate_route_explanation(new_steps)
     }
 
-def fetch_google_itineraries(origin: str, destination: str) -> List[Dict]:
+def fetch_google_itineraries(origin: str, destination: str, departure_time: Optional[str] = None) -> List[Dict]:
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": GOOGLE_API_KEY,
         "X-Goog-FieldMask": "routes.duration,routes.legs.steps,routes.travelAdvisory"
     }
-    payload = {"origin": {"address": origin}, "destination": {"address": destination}, "travelMode": "TRANSIT", "computeAlternativeRoutes": True}
+    payload = {
+        "origin": {"address": origin},
+        "destination": {"address": destination},
+        "travelMode": "TRANSIT",
+        "computeAlternativeRoutes": True
+    }
+
+    if departure_time:
+        payload["departureTime"] = departure_time
 
     try:
         response = requests.post(ROUTES_ENDPOINT, json=payload, headers=headers)
@@ -392,15 +401,14 @@ def next_cached_arrival(arrivals: List[float], current_unix: float) -> Optional[
 
 def get_nyc_hour(dt: datetime) -> int:
     """Helper to derive localized Eastern hour from UTC time to align with MTA schedules."""
-    # Rough shift for approximation if zoneinfo isn't installed; shifts UTC to EST/EDT
-    # Alternatively, use standard python timedelta adjustment:
-    est_offset = timedelta(hours=-4) # Approximating Eastern Daylight Time (EDT)
+    est_offset = timedelta(hours=-4)
     nyc_dt = dt + est_offset
     return nyc_dt.hour
 
 def run_competitive_simulation(
     itineraries: List[Dict],
     live_telemetry: Dict[str, Dict],
+    sim_start_time: datetime,
     num_trials: int = DEFAULT_SIM_TRIALS,
     live_arrival_cache: Optional[Dict[tuple, List[float]]] = None,
 ) -> Dict:
@@ -434,10 +442,11 @@ def run_competitive_simulation(
                 if step["mode"] == "WALK":
                     initial_walk_mins += step["baseline_duration"]
 
+            # Butterfly base: Determine exact clock moment user leaves home
             if first_train and first_train.get("scheduled_departure"):
                 virtual_clock = first_train["scheduled_departure"] - timedelta(minutes=(1.0 + initial_walk_mins))
             else:
-                virtual_clock = datetime.now(timezone.utc)
+                virtual_clock = sim_start_time
 
             sim_time = 0.0
             delayed_transfer_this_trial = False
@@ -486,6 +495,7 @@ def run_competitive_simulation(
 
                     if wait_time_mins < 0: wait_time_mins = 0
 
+                    # Butterfly checking: did previous delays force a missed connection?
                     if transit_leg_count > 1 and step.get("scheduled_departure"):
                         sched_unix = step["scheduled_departure"].timestamp()
                         boarded_unix = current_unix + (wait_time_mins * 60.0)
@@ -529,17 +539,31 @@ def run_competitive_simulation(
             "p90_mins": round(p90_time, 1),
             "iqr_mins": round(iqr_time, 1),
             "best_time": round(float(np.min(durations)), 1),
-            "worst_time": round(float(np.max(durations)), 1)
+            "worst_time": round(float(np.max(durations)), 1),
+            "p25_mins": round(float(p25), 1),
+            "p75_mins": round(float(p75), 1)
         }
     return results
 
 @app.post("/api/simulate")
 def run_simulation(req: SimulationRequest):
-    # Capture the exact start time of the execution run
-    execution_start_str = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %I:%M:%S %p")
-
     try:
-        itineraries = fetch_google_itineraries(req.origin, req.destination)
+        # Resolve target departure time
+        if req.departure_time:
+            sim_start_time = parse_iso_time(req.departure_time)
+            if not sim_start_time:
+                sim_start_time = datetime.now(timezone.utc)
+        else:
+            sim_start_time = datetime.now(timezone.utc)
+
+        # Format user-friendly display string for the frontend banner
+        est_offset = timedelta(hours=-4)
+        local_start_time = sim_start_time + est_offset
+        execution_start_str = local_start_time.strftime("%A, %B %d %Y at %I:%M %p")
+
+        # Pass departure time to Google Routes
+        rfc_time = sim_start_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+        itineraries = fetch_google_itineraries(req.origin, req.destination, rfc_time)
         if not itineraries: raise HTTPException(status_code=400, detail="No routes found")
 
         live_telemetry = {}
@@ -556,7 +580,12 @@ def run_simulation(req: SimulationRequest):
                         live_telemetry[clean] = {"delay": delay, "has_alert": alert}
 
         live_arrival_cache = build_live_arrival_cache(itineraries)
-        sim_results = run_competitive_simulation(itineraries, live_telemetry, live_arrival_cache=live_arrival_cache)
+        sim_results = run_competitive_simulation(
+            itineraries,
+            live_telemetry,
+            sim_start_time,
+            live_arrival_cache=live_arrival_cache
+        )
 
         payload = []
         for route in itineraries:
@@ -569,7 +598,6 @@ def run_simulation(req: SimulationRequest):
             route_data["title"] = route_signature(route["itinerary"])
             payload.append(route_data)
 
-        # Return the start time at the top level of the payload
         return {
             "status": "success",
             "run_start_time": execution_start_str,
