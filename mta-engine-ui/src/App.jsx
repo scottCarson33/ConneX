@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   MapPin,
   ArrowRight,
@@ -14,32 +14,54 @@ import {
   Cpu,
   Wifi,
   Clock,
+  CalendarDays,
 } from "lucide-react";
 
 export default function App() {
   const [origin, setOrigin] = useState("");
   const [destination, setDestination] = useState("");
+  const [timeMode, setTimeMode] = useState("depart_at");
+  const [targetTime, setTargetTime] = useState("");
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState([]);
-  const [runStartTime, setRunStartTime] = useState(null);
+  const [metaData, setMetaData] = useState(null);
   const [error, setError] = useState("");
   const [activeRouteIdx, setActiveRouteIdx] = useState(0);
 
   const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+
+  // Pre-fill datetime-local with current local time
+  useEffect(() => {
+    const now = new Date();
+    // Format to YYYY-MM-DDThh:mm
+    const offset = now.getTimezoneOffset() * 60000;
+    const localISOTime = new Date(now - offset).toISOString().slice(0, 16);
+    setTargetTime(localISOTime);
+  }, []);
 
   const handleSimulate = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError("");
     setResults([]);
-    setRunStartTime(null);
+    setMetaData(null);
     setActiveRouteIdx(0);
 
     try {
+      let isoTarget = null;
+      if (targetTime) {
+        isoTarget = new Date(targetTime).toISOString();
+      }
+
       const res = await fetch(`${API_BASE_URL}/api/simulate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ origin, destination }),
+        body: JSON.stringify({
+          origin,
+          destination,
+          target_time: isoTarget,
+          time_mode: timeMode,
+        }),
       });
 
       if (!res.ok)
@@ -48,11 +70,11 @@ export default function App() {
       const data = await res.json();
 
       if (data.status === "success") {
-        setRunStartTime(data.run_start_time);
-        const sorted = data.data.sort(
-          (a, b) => b.metrics.win_rate - a.metrics.win_rate,
-        );
-        setResults(sorted);
+        setMetaData({
+          mode: data.time_mode,
+          targetStr: data.target_time_str,
+        });
+        setResults(data.data);
       } else {
         throw new Error("Simulation returned an error state.");
       }
@@ -139,7 +161,7 @@ export default function App() {
             <div className="flex items-center justify-center md:justify-start gap-3 mb-3 animate-fade">
               <Cpu className="w-5 h-5 text-orange-500" />
               <span className="text-[10px] font-mono tracking-[0.2em] text-orange-500 uppercase border border-orange-500/30 bg-orange-500/10 px-3 py-1 rounded">
-                V9.3 Stochastic Matrix
+                V9.4 Stochastic Matrix
               </span>
             </div>
             <h1 className="text-5xl md:text-6xl font-black tracking-tighter text-white uppercase drop-shadow-2xl animate-slide-up">
@@ -179,7 +201,7 @@ export default function App() {
           style={{ animationDelay: "0.1s" }}
         >
           <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
-            <div className="md:col-span-5 relative group">
+            <div className="md:col-span-4 relative group">
               <label className="block text-[10px] font-mono uppercase tracking-widest text-slate-400 mb-2 ml-1">
                 Origin Node
               </label>
@@ -200,7 +222,7 @@ export default function App() {
               <ArrowRight className="w-5 h-5 text-slate-600" />
             </div>
 
-            <div className="md:col-span-4 relative group">
+            <div className="md:col-span-3 relative group">
               <label className="block text-[10px] font-mono uppercase tracking-widest text-slate-400 mb-2 ml-1">
                 Destination Node
               </label>
@@ -213,6 +235,34 @@ export default function App() {
                   placeholder="e.g., Brooklyn Bridge"
                   value={destination}
                   onChange={(e) => setDestination(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="md:col-span-2 relative group">
+              <div className="flex gap-2 mb-2 ml-1">
+                <button
+                  type="button"
+                  onClick={() => setTimeMode("depart_at")}
+                  className={`text-[10px] font-mono uppercase tracking-widest px-2 py-1 rounded transition-colors ${timeMode === "depart_at" ? "bg-orange-500/20 text-orange-400" : "text-slate-500 hover:text-slate-300"}`}
+                >
+                  Depart At
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTimeMode("arrive_by")}
+                  className={`text-[10px] font-mono uppercase tracking-widest px-2 py-1 rounded transition-colors ${timeMode === "arrive_by" ? "bg-emerald-500/20 text-emerald-400" : "text-slate-500 hover:text-slate-300"}`}
+                >
+                  Arrive By
+                </button>
+              </div>
+              <div className="relative">
+                <CalendarDays className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
+                <input
+                  type="datetime-local"
+                  className="w-full bg-[#050508] border border-white/10 rounded-xl py-3.5 pl-11 pr-2 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 text-white placeholder-slate-600 transition-all font-medium text-xs md:text-sm appearance-none"
+                  value={targetTime}
+                  onChange={(e) => setTargetTime(e.target.value)}
                 />
               </div>
             </div>
@@ -246,13 +296,19 @@ export default function App() {
 
         {results.length > 0 && (
           <div className="space-y-8 animate-slide-up">
-            {runStartTime && (
-              <div className="bg-[#0c0d16]/80 border border-orange-500/30 rounded-lg px-4 py-3 flex items-center gap-3 backdrop-blur-md animate-fade">
-                <Clock className="w-4 h-4 text-orange-500" />
-                <span className="text-xs text-slate-400 uppercase tracking-widest font-mono">
-                  Simulating Immediate Departure:{" "}
-                  <span className="text-slate-200 font-bold ml-1">
-                    {runStartTime}
+            {metaData && (
+              <div
+                className={`border rounded-lg px-4 py-3 flex items-center gap-3 backdrop-blur-md animate-fade ${metaData.mode === "arrive_by" ? "bg-emerald-950/20 border-emerald-500/30" : "bg-[#0c0d16]/80 border-orange-500/30"}`}
+              >
+                <Clock
+                  className={`w-5 h-5 ${metaData.mode === "arrive_by" ? "text-emerald-500" : "text-orange-500"}`}
+                />
+                <span className="text-xs text-slate-300 uppercase tracking-widest font-mono">
+                  {metaData.mode === "arrive_by"
+                    ? "Target Arrival: "
+                    : "Departure Base: "}
+                  <span className="text-white font-bold ml-1">
+                    {metaData.targetStr}
                   </span>
                 </span>
               </div>
@@ -296,6 +352,33 @@ export default function App() {
                     <h3 className="text-3xl font-black text-white tracking-tight mb-2 drop-shadow-md">
                       {activeRoute.title}
                     </h3>
+                  </div>
+
+                  <div className="mb-6 flex flex-col md:flex-row items-center gap-4 bg-gradient-to-r from-orange-500/10 to-emerald-500/10 p-5 rounded-xl border border-white/10">
+                    <div className="flex-1 flex items-center gap-4 border-r border-white/10 pr-4">
+                      <Clock className="w-6 h-6 text-orange-500" />
+                      <div>
+                        <span className="text-[10px] uppercase tracking-widest text-slate-500 font-mono block">
+                          {metaData?.mode === "arrive_by"
+                            ? "Required Departure (P90)"
+                            : "Departure Time"}
+                        </span>
+                        <span className="font-bold text-white font-mono text-lg">
+                          {activeRoute.metrics.req_departure_time}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex-1 flex items-center justify-end gap-4 pl-4">
+                      <div className="text-right">
+                        <span className="text-[10px] uppercase tracking-widest text-slate-500 font-mono block">
+                          Est. Final Arrival
+                        </span>
+                        <span className="font-bold text-emerald-400 font-mono text-lg">
+                          {activeRoute.metrics.est_arrival_time}
+                        </span>
+                      </div>
+                      <CheckCircle className="w-6 h-6 text-emerald-500" />
+                    </div>
                   </div>
 
                   <div className="relative border-l-2 border-[#1f202e] ml-4 space-y-6">
@@ -448,7 +531,9 @@ export default function App() {
                         Route Signature
                       </th>
                       <th className="py-4 px-6 font-semibold text-center">
-                        Win Rate
+                        {metaData?.mode === "arrive_by"
+                          ? "Req. Departure"
+                          : "Win Rate"}
                       </th>
                       <th className="py-4 px-6 font-semibold text-center">
                         Typical (P50)
@@ -517,9 +602,15 @@ export default function App() {
                             </div>
                           </td>
                           <td className="py-4 px-6 text-center">
-                            <span className="font-mono font-bold text-emerald-400 bg-emerald-400/10 px-2 py-1 rounded">
-                              {route.metrics.win_rate}%
-                            </span>
+                            {metaData?.mode === "arrive_by" ? (
+                              <span className="font-mono font-bold text-orange-400 bg-orange-400/10 px-2 py-1 rounded">
+                                {route.metrics.req_departure_time}
+                              </span>
+                            ) : (
+                              <span className="font-mono font-bold text-emerald-400 bg-emerald-400/10 px-2 py-1 rounded">
+                                {route.metrics.win_rate}%
+                              </span>
+                            )}
                           </td>
                           <td className="py-4 px-6 text-center font-mono text-slate-200">
                             {route.metrics.p50_mins}m
