@@ -127,8 +127,8 @@ export default function App() {
         <div className="absolute left-0 top-0 bottom-0 w-16 bg-gradient-to-r from-[#0a0a0f] to-transparent z-20" />
         <div className="absolute right-0 top-0 bottom-0 w-16 bg-gradient-to-l from-[#0a0a0f] to-transparent z-20" />
 
-        <div className="ticker-track animate-marquee flex items-center gap-8 text-[11px] font-mono tracking-widest text-slate-400 uppercase">
-          {[...Array(3)].map((_, i) => (
+        <div className="ticker-track flex items-center gap-8 text-[11px] font-mono tracking-widest text-slate-400 uppercase">
+          {[...Array(2)].map((_, i) => (
             <React.Fragment key={i}>
               <span className="flex items-center gap-2 text-emerald-400">
                 <div className="relative flex h-2 w-2">
@@ -545,7 +545,7 @@ export default function App() {
                         Time Spread (Min → Max)
                       </th>
                       <th className="py-4 px-6 font-semibold text-center">
-                        Severe Risk
+                        Risk / Early
                       </th>
                       <th className="py-4 px-6 font-semibold text-right">
                         Cost
@@ -654,15 +654,20 @@ export default function App() {
                           </td>
 
                           <td className="py-4 px-6 text-center font-mono">
-                            <span
-                              className={
-                                route.metrics.severe_risk > 25
-                                  ? "text-red-400 font-bold drop-shadow-[0_0_5px_rgba(248,113,113,0.5)]"
-                                  : "text-slate-400"
-                              }
-                            >
-                              {route.metrics.severe_risk}%
-                            </span>
+                            <div className="flex flex-col gap-1 items-center">
+                              <span
+                                className={
+                                  route.metrics.severe_risk > 25
+                                    ? "text-red-400 font-bold drop-shadow-[0_0_5px_rgba(248,113,113,0.5)]"
+                                    : "text-slate-400"
+                                }
+                              >
+                                {route.metrics.severe_risk}%
+                              </span>
+                              <span className="text-[9px] text-emerald-400 opacity-80">
+                                {route.metrics.early_prob}%
+                              </span>
+                            </div>
                           </td>
                           <td className="py-4 px-6 text-right font-mono font-semibold text-slate-300">
                             ${route.cost.toFixed(2)}

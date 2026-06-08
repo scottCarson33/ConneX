@@ -4,6 +4,7 @@ import math
 import os
 import random
 import time
+import xml.etree.ElementTree as ET
 from bisect import bisect_left
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -45,6 +46,12 @@ MTA_FEED_URLS = {
     "MNR": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/mnr%2Fgtfs-mnr",
     "LIRR": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/lirr%2Fgtfs-lirr",
     "ALERTS": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/camsys%2Fsubway-alerts",
+}
+
+NJ_RSS_FEEDS = {
+    "RAIL": "https://www.njtransit.com/rss/RailAdvisories_feed.xml",
+    "BUS": "https://www.njtransit.com/rss/BusAdvisories_feed.xml",
+    "LIGHT_RAIL": "https://www.njtransit.com/rss/LightRailAdvisories_feed.xml"
 }
 
 # --- SIMULATION CONSTANTS ---
@@ -175,10 +182,33 @@ def get_transit_feed_type(
         return "G"
     if route in ["1", "2", "3", "4", "5", "6", "7", "7X"]:
         return "NUMBERS"
+    if "NJ" in str(line_name).upper() or "NJ TRANSIT" in str(line_name).upper() or "PATH" in str(line_name).upper():
+        return "NJT"
     return None
 
 
-def check_for_alerts(route_character: str) -> bool:
+def check_nj_alerts(line_id: str, is_bus: bool) -> bool:
+    target = str(line_id).lower()
+    feed_url = NJ_RSS_FEEDS["BUS"] if is_bus else NJ_RSS_FEEDS["RAIL"]
+    try:
+        response = requests.get(feed_url, timeout=5)
+        if response.status_code == 200:
+            root = ET.fromstring(response.content)
+            for item in root.findall(".//item"):
+                title = (item.find("title").text or "").lower()
+                desc = (item.find("description").text or "").lower()
+                if target in title or target in desc:
+                    keywords = ["delay", "suspended", "cancelled", "cancel", "disruption"]
+                    if any(w in title or w in desc for w in keywords):
+                        return True
+    except:
+        pass
+    return False
+
+def check_for_alerts(route_character: str, feed_key: Optional[str] = None, is_bus: bool = False) -> bool:
+    if feed_key == "NJT":
+        return check_nj_alerts(route_character, is_bus)
+
     feed = gtfs_realtime_pb2.FeedMessage()
     try:
         response = requests.get(MTA_FEED_URLS["ALERTS"], headers=MTA_HEADERS, timeout=5)
@@ -624,6 +654,7 @@ def run_competitive_simulation(
     win_counts = {r["route_index"]: 0 for r in itineraries}
     severe_delays = {r["route_index"]: 0 for r in itineraries}
     delayed_transfers = {r["route_index"]: 0 for r in itineraries}
+    early_arrivals = {r["route_index"]: 0 for r in itineraries}
 
     all_durations = {r["route_index"]: [] for r in itineraries}
     step_stats = {
@@ -639,18 +670,37 @@ def run_competitive_simulation(
         trial_durations = {}
         trial_line_offsets = {}
         trial_line_delays = {}
+        trial_hub_shocks = {}
 
         def get_trial_line_schedule(line, tod):
             if line not in trial_line_offsets:
                 h = get_headway(line, tod) or 10.0
                 trial_line_offsets[line] = random.uniform(0, h)
                 data = live_telemetry.get(line, {"delay": 0.0, "has_alert": False})
-                gamma_delay = (
-                    np.random.gamma(3, 3)
-                    if data["has_alert"]
-                    else np.random.gamma(1.5, 2.0)
-                )
-                trial_line_delays[line] = data["delay"] + gamma_delay
+                
+                # Heavy-tailed base delay (log-normal)
+                if data["has_alert"]:
+                    base_delay = np.random.lognormal(2.5, 1.0) # Mean ~20 mins, heavy tail
+                else:
+                    base_delay = np.random.lognormal(1.0, 0.8) # Mean ~3-4 mins
+
+                # Correlated delays (System Shocks)
+                hub_delay = 0.0
+                hubs = {
+                    "union sq": ["L", "N", "Q", "R", "W", "4", "5", "6"],
+                    "times sq": ["1", "2", "3", "7", "N", "Q", "R", "W", "S"],
+                    "atlantic av": ["2", "3", "4", "5", "B", "D", "N", "Q", "R"],
+                    "fulton": ["2", "3", "4", "5", "A", "C", "J", "Z"]
+                }
+                
+                for hub, lines in hubs.items():
+                    if line in lines:
+                        if hub not in trial_hub_shocks:
+                            # 2% chance of a severe system shock per hub per trial
+                            trial_hub_shocks[hub] = np.random.lognormal(3.0, 0.8) if random.random() < 0.02 else 0.0
+                        hub_delay = max(hub_delay, trial_hub_shocks[hub])
+
+                trial_line_delays[line] = data["delay"] + base_delay + hub_delay
             return (
                 trial_line_offsets[line],
                 trial_line_delays[line],
@@ -741,7 +791,8 @@ def run_competitive_simulation(
                         if delay_mins > TRANSFER_DELAY_TOLERANCE_MINS:
                             delayed_transfer_this_trial = True
 
-                    ride_time = base * random.uniform(0.95, 1.05)
+                    # Widen ride time variance using lognormal to model "traffic ahead"
+                    ride_time = base * np.random.lognormal(0.0, 0.15)
                     leg_duration = wait_time_mins + ride_time
 
                     board_unix = current_unix + (wait_time_mins * 60.0)
@@ -759,8 +810,14 @@ def run_competitive_simulation(
                 delayed_transfers[route["route_index"]] += 1
             trial_durations[route["route_index"]] = sim_time
             all_durations[route["route_index"]].append(sim_time)
-            if sim_time > (route["baseline_mins"] + 20.0):
+            
+            # Percentage-based severe risk (1.5x baseline)
+            if sim_time > (route["baseline_mins"] * 1.5):
                 severe_delays[route["route_index"]] += 1
+            
+            # Early arrival (beats baseline)
+            if sim_time < (route["baseline_mins"] - 2.0):
+                early_arrivals[route["route_index"]] += 1
 
         winner = min(trial_durations, key=trial_durations.get)
         win_counts[winner] += 1
@@ -825,6 +882,7 @@ def run_competitive_simulation(
         results[route_index] = {
             "win_rate": round((win_counts[r["route_index"]] / num_trials) * 100, 1),
             "severe_risk": round((severe_delays[route_index] / num_trials) * 100, 1),
+            "early_prob": round((early_arrivals[route_index] / num_trials) * 100, 1),
             "transfer_delay_prob": round(
                 (delayed_transfers[route_index] / num_trials) * 100, 1
             ),
@@ -886,7 +944,7 @@ def run_simulation(req: SimulationRequest):
 
                     if clean not in live_telemetry:
                         delay = fetch_live_delay(clean, f_key)
-                        alert = check_for_alerts(clean)
+                        alert = check_for_alerts(clean, f_key, s["is_bus"])
                         live_telemetry[clean] = {"delay": delay, "has_alert": alert}
 
         live_arrival_cache = build_live_arrival_cache(itineraries)
