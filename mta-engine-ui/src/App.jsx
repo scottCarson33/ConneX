@@ -48,10 +48,18 @@ export default function App() {
     setActiveRouteIdx(0);
 
     try {
-      let isoTarget = null;
-      if (targetTime) {
-        isoTarget = new Date(targetTime).toISOString();
+      let currentTarget = targetTime ? new Date(targetTime) : new Date();
+      const now = new Date();
+      
+      // If the selected time is in the past, update it to right now to prevent stale simulations
+      if (currentTarget < now) {
+        currentTarget = now;
+        const offset = now.getTimezoneOffset() * 60000;
+        const localISOTime = new Date(now - offset).toISOString().slice(0, 16);
+        setTargetTime(localISOTime);
       }
+      
+      const isoTarget = currentTarget.toISOString();
 
       const res = await fetch(`${API_BASE_URL}/api/simulate`, {
         method: "POST",
