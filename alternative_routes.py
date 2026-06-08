@@ -127,22 +127,22 @@ ALTERNATIVE_GROUPS = {
     },
 }
 
-# Average headways in minutes for [peak, midday, evening, overnight]
+# Average headways in minutes for [peak, midday, evening, overnight, weekend]
 HEADWAY_DATA = {
-    "A": {"peak": 5.0, "midday": 8.0, "evening": 10.0, "overnight": 20.0},
-    "C": {"peak": 6.0, "midday": 10.0, "evening": 12.0, "overnight": None},
-    "B": {"peak": 6.0, "midday": 10.0, "evening": 10.0, "overnight": None},
-    "D": {"peak": 5.0, "midday": 8.0, "evening": 10.0, "overnight": 20.0},
-    "N": {"peak": 6.0, "midday": 10.0, "evening": 12.0, "overnight": 20.0},
-    "Q": {"peak": 5.0, "midday": 8.0, "evening": 10.0, "overnight": 20.0},
-    "R": {"peak": 8.0, "midday": 10.0, "evening": 15.0, "overnight": None},
-    "4": {"peak": 4.0, "midday": 6.0, "evening": 8.0, "overnight": 20.0},
-    "5": {"peak": 5.0, "midday": 8.0, "evening": 12.0, "overnight": None},
-    "2": {"peak": 5.0, "midday": 8.0, "evening": 10.0, "overnight": 20.0},
-    "3": {"peak": 6.0, "midday": 8.0, "evening": 10.0, "overnight": None},
-    "J": {"peak": 5.0, "midday": 8.0, "evening": 10.0, "overnight": 20.0},
-    "Z": {"peak": 5.0, "midday": None, "evening": None, "overnight": None},
-    "DEFAULT": {"peak": 6.0, "midday": 10.0, "evening": 12.0, "overnight": 20.0},
+    "A": {"peak": 5.0, "midday": 8.0, "evening": 10.0, "overnight": 20.0, "weekend": 12.0},
+    "C": {"peak": 6.0, "midday": 10.0, "evening": 12.0, "overnight": None, "weekend": 12.0},
+    "B": {"peak": 6.0, "midday": 10.0, "evening": 10.0, "overnight": None, "weekend": None},
+    "D": {"peak": 5.0, "midday": 8.0, "evening": 10.0, "overnight": 20.0, "weekend": 12.0},
+    "N": {"peak": 6.0, "midday": 10.0, "evening": 12.0, "overnight": 20.0, "weekend": 12.0},
+    "Q": {"peak": 5.0, "midday": 8.0, "evening": 10.0, "overnight": 20.0, "weekend": 10.0},
+    "R": {"peak": 8.0, "midday": 10.0, "evening": 15.0, "overnight": None, "weekend": 15.0},
+    "4": {"peak": 4.0, "midday": 6.0, "evening": 8.0, "overnight": 20.0, "weekend": 10.0},
+    "5": {"peak": 5.0, "midday": 8.0, "evening": 12.0, "overnight": None, "weekend": 12.0},
+    "2": {"peak": 5.0, "midday": 8.0, "evening": 10.0, "overnight": 20.0, "weekend": 12.0},
+    "3": {"peak": 6.0, "midday": 8.0, "evening": 10.0, "overnight": None, "weekend": 12.0},
+    "J": {"peak": 5.0, "midday": 8.0, "evening": 10.0, "overnight": 20.0, "weekend": 12.0},
+    "Z": {"peak": 5.0, "midday": None, "evening": None, "overnight": None, "weekend": None},
+    "DEFAULT": {"peak": 6.0, "midday": 10.0, "evening": 12.0, "overnight": 20.0, "weekend": 12.0},
 }
 
 

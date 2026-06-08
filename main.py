@@ -502,6 +502,7 @@ def fetch_google_itineraries(
                 t_line = details.get("transitLine", {})
                 v_type = t_line.get("vehicle", {}).get("type", "")
                 stop_details = details.get("stopDetails", {})
+                stop_count = details.get("stopCount", 1)
 
                 line_id = t_line.get("nameShort")
                 line_name = t_line.get("name", "")
@@ -558,6 +559,7 @@ def fetch_google_itineraries(
                         "is_bus": is_bus,
                         "is_ferry": is_ferry,
                         "is_commuter_rail": is_commuter_rail,
+                        "stop_count": stop_count,
                         "line_name": line_name,
                         "departure_stop": dep_stop,
                         "arrival_stop": arr_stop,
@@ -763,23 +765,29 @@ def run_competitive_simulation(
                             gtfs_arrivals, current_unix
                         )
 
+                    nyc_hour = get_nyc_hour(virtual_clock)
+                    is_weekend = virtual_clock.weekday() >= 5
+                    if is_weekend:
+                        tod = "weekend"
+                    elif 6 <= nyc_hour < 10 or 15 <= nyc_hour < 20:
+                        tod = "peak"
+                    elif 10 <= nyc_hour < 15:
+                        tod = "midday"
+                    elif 20 <= nyc_hour < 24:
+                        tod = "evening"
+                    else:
+                        tod = "overnight"
+
+                    offset, mc_delay, headway = get_trial_line_schedule(line_id, tod)
+
                     if next_gtfs_arrival:
                         wait_time_mins = (next_gtfs_arrival - current_unix) / 60.0
+                        ride_delay = mc_delay
                     else:
-                        nyc_hour = get_nyc_hour(virtual_clock)
-                        if 6 <= nyc_hour < 10 or 15 <= nyc_hour < 20:
-                            tod = "peak"
-                        elif 10 <= nyc_hour < 15:
-                            tod = "midday"
-                        elif 20 <= nyc_hour < 24:
-                            tod = "evening"
-                        else:
-                            tod = "overnight"
-
-                        offset, delay, headway = get_trial_line_schedule(line_id, tod)
-                        k = math.ceil((sim_time - offset - delay) / headway)
-                        next_arrival_sim = offset + k * headway + delay
+                        k = math.ceil((sim_time - offset) / headway)
+                        next_arrival_sim = offset + k * headway + (mc_delay * 0.5)
                         wait_time_mins = next_arrival_sim - sim_time
+                        ride_delay = mc_delay * 0.5
 
                     if wait_time_mins < 0:
                         wait_time_mins = 0
@@ -791,8 +799,24 @@ def run_competitive_simulation(
                         if delay_mins > TRANSFER_DELAY_TOLERANCE_MINS:
                             delayed_transfer_this_trial = True
 
-                    # Widen ride time variance using lognormal to model "traffic ahead"
-                    ride_time = base * np.random.lognormal(0.0, 0.15)
+                    # Widen ride time variance using micro-simulation per stop
+                    stop_count = step.get("stop_count", 1)
+                    avg_segment_time = base / stop_count
+                    micro_ride_time = 0.0
+                    
+                    for _ in range(stop_count):
+                        # 1. Travel variance per segment
+                        micro_ride_time += avg_segment_time * np.random.normal(1.0, 0.05)
+                        
+                        # 2. Door holding / passenger loading delays (5% chance per stop)
+                        if random.random() < 0.05:
+                            micro_ride_time += np.random.exponential(0.5) # mean 30s
+                            
+                        # 3. Train ahead / tunnel blockage (1% chance per segment)
+                        if random.random() < 0.01:
+                            micro_ride_time += np.random.gamma(2.0, 1.0) # mean 2 mins
+                    
+                    ride_time = micro_ride_time + ride_delay
                     leg_duration = wait_time_mins + ride_time
 
                     board_unix = current_unix + (wait_time_mins * 60.0)
