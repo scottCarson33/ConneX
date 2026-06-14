@@ -291,15 +291,22 @@ def parse_iso_time(time_str: str) -> Optional[datetime]:
 
 def route_signature(itinerary: List[Dict]) -> str:
     segments = []
+    last_label = None
     for step in itinerary:
         if step["mode"] == "TRANSIT":
             label = str(step.get("line_display") or step.get("line_id") or "Transit")
             for suffix in [" Train", " Bus", " Ferry", " Rail"]:
                 label = label.replace(suffix, "")
-            if not segments or segments[-1] != label:
+            
+            if label != last_label:
+                if segments and step.get("departure_stop"):
+                    station = step["departure_stop"].replace("Station", "").strip()
+                    segments.append(f"({station})")
                 segments.append(label)
+                last_label = label
         elif step["mode"] == "CITIBIKE" and "Citi Bike" not in segments:
             segments.append("Citi Bike")
+            last_label = "Citi Bike"
     return " → ".join(segments) if segments else "Walk Only"
 
 
