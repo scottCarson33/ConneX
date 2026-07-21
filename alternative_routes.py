@@ -1,4 +1,5 @@
 from typing import List, Optional
+import re
 
 ALTERNATIVE_GROUPS = {
     # IND Eighth Avenue Line (Blue)
@@ -155,7 +156,8 @@ def clean_stop_name(stop_name: str) -> str:
 def is_stop_in_list(target: str, stop_list: List[str]) -> bool:
     target_clean = clean_stop_name(target).lower()
     for s in stop_list:
-        if s.lower() in target_clean or target_clean in s.lower():
+        s_clean = s.lower()
+        if s_clean == target_clean or re.search(rf'\b{re.escape(s_clean)}\b', target_clean):
             return True
     return False
 

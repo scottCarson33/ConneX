@@ -7,6 +7,7 @@ import time
 import xml.etree.ElementTree as ET
 from bisect import bisect_left
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -43,6 +44,7 @@ MTA_FEED_URLS = {
     "JZ": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-jz",
     "L": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-l",
     "G": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-g",
+    "SIR": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-si",
     "MNR": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/mnr%2Fgtfs-mnr",
     "LIRR": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/lirr%2Fgtfs-lirr",
     "ALERTS": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/camsys%2Fsubway-alerts",
@@ -56,7 +58,7 @@ NJ_RSS_FEEDS = {
 
 # --- SIMULATION CONSTANTS ---
 BASE_FARE = 3.00
-EXPRESS_BUS_FARE = 7.25
+EXPRESS_BUS_FARE = 7.00
 NYC_FERRY_FARE = 4.50
 STATEN_ISLAND_FERRY_FARE = 0.00
 CITIBIKE_UNLOCK = 4.79
@@ -182,6 +184,10 @@ def get_transit_feed_type(
         return "G"
     if route in ["1", "2", "3", "4", "5", "6", "7", "7X"]:
         return "NUMBERS"
+    if route in ["S", "GS"]:
+        return "NUMBERS"
+    if route in ["SIR"]:
+        return "SIR"
     if "NJ" in str(line_name).upper() or "NJ TRANSIT" in str(line_name).upper() or "PATH" in str(line_name).upper():
         return "NJT"
     return None
@@ -647,8 +653,7 @@ def next_cached_arrival(arrivals: List[float], current_unix: float) -> Optional[
 
 
 def get_nyc_hour(dt: datetime) -> int:
-    est_offset = timedelta(hours=-4)
-    return (dt + est_offset).hour
+    return dt.astimezone(ZoneInfo("America/New_York")).hour
 
 
 def run_competitive_simulation(
@@ -683,7 +688,11 @@ def run_competitive_simulation(
 
         def get_trial_line_schedule(line, tod):
             if line not in trial_line_offsets:
-                h = get_headway(line, tod) or 10.0
+                h = get_headway(line, tod)
+                if h is None:
+                    trial_line_offsets[line] = 0.0
+                    trial_line_delays[line] = 9999.0
+                    return (0.0, 9999.0, 9999.0)
                 trial_line_offsets[line] = random.uniform(0, h)
                 data = live_telemetry.get(line, {"delay": 0.0, "has_alert": False})
                 
@@ -710,10 +719,13 @@ def run_competitive_simulation(
                         hub_delay = max(hub_delay, trial_hub_shocks[hub])
 
                 trial_line_delays[line] = data["delay"] + base_delay + hub_delay
+            h_second = get_headway(line, tod)
+            if h_second is None:
+                return (0.0, 9999.0, 9999.0)
             return (
                 trial_line_offsets[line],
                 trial_line_delays[line],
-                get_headway(line, tod) or 10.0,
+                h_second,
             )
 
         for route in itineraries:
@@ -785,16 +797,23 @@ def run_competitive_simulation(
                     else:
                         tod = "overnight"
 
-                    offset, mc_delay, headway = get_trial_line_schedule(line_id, tod)
-
-                    if next_gtfs_arrival:
-                        wait_time_mins = (next_gtfs_arrival - current_unix) / 60.0
+                    is_commuter_rail = step.get("is_commuter_rail", False)
+                    if is_commuter_rail and step.get("scheduled_departure"):
+                        sched_unix = step["scheduled_departure"].timestamp()
+                        wait_time_mins = max(0.0, (sched_unix - current_unix) / 60.0)
+                        _, mc_delay, _ = get_trial_line_schedule(line_id, tod)
                         ride_delay = mc_delay
                     else:
-                        k = math.ceil((sim_time - offset) / headway)
-                        next_arrival_sim = offset + k * headway + (mc_delay * 0.5)
-                        wait_time_mins = next_arrival_sim - sim_time
-                        ride_delay = mc_delay * 0.5
+                        offset, mc_delay, headway = get_trial_line_schedule(line_id, tod)
+    
+                        if next_gtfs_arrival:
+                            wait_time_mins = (next_gtfs_arrival - current_unix) / 60.0
+                            ride_delay = mc_delay
+                        else:
+                            k = math.ceil((sim_time - offset) / headway)
+                            next_arrival_sim = offset + k * headway + (mc_delay * 0.5)
+                            wait_time_mins = next_arrival_sim - sim_time
+                            ride_delay = mc_delay * 0.5
 
                     if wait_time_mins < 0:
                         wait_time_mins = 0
@@ -807,7 +826,7 @@ def run_competitive_simulation(
                             delayed_transfer_this_trial = True
 
                     # Widen ride time variance using micro-simulation per stop
-                    stop_count = step.get("stop_count", 1)
+                    stop_count = max(1, step.get("stop_count", 1))
                     avg_segment_time = base / stop_count
                     micro_ride_time = 0.0
                     

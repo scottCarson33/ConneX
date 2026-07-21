@@ -96,20 +96,20 @@ export default function App() {
   const getModeIcon = (mode) => {
     if (mode === "CITIBIKE")
       return (
-        <Bike className="w-5 h-5 text-blue-400 drop-shadow-[0_0_8px_rgba(96,165,250,0.8)]" />
+        <Bike className="w-5 h-5 text-blue-400" />
       );
     if (mode === "WALK")
       return <Footprints className="w-5 h-5 text-slate-400" />;
     if (mode === "DOCKING_OVERHEAD")
       return (
-        <Clock className="w-5 h-5 text-purple-400 drop-shadow-[0_0_8px_rgba(168,85,247,0.8)]" />
+        <Clock className="w-5 h-5 text-purple-400" />
       );
     if (mode === "ARRIVE")
       return (
-        <MapPin className="w-5 h-5 text-emerald-500 drop-shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
+        <MapPin className="w-5 h-5 text-emerald-500" />
       );
     return (
-      <Train className="w-5 h-5 text-orange-500 drop-shadow-[0_0_8px_rgba(249,115,22,0.8)]" />
+      <Train className="w-5 h-5 text-orange-500" />
     );
   };
 
@@ -126,16 +126,17 @@ export default function App() {
       : 120;
 
   return (
-    <div className="min-h-screen bg-[#030305] text-slate-100 font-sans antialiased relative overflow-x-hidden selection:bg-orange-500/30">
+    <div className="min-h-screen bg-[#0a0a0c] text-slate-100 font-sans antialiased relative overflow-x-hidden">
       <div className="fixed inset-0 bg-grid pointer-events-none z-0 opacity-50" />
-      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[300px] bg-orange-600/10 blur-[120px] rounded-full pointer-events-none z-0" />
+      <div className="absolute -top-[20%] -left-[10%] w-[60vw] h-[50vh] bg-indigo-500/[0.03] blur-[150px] rounded-full pointer-events-none z-0" />
+      <div className="absolute top-[30%] -right-[15%] w-[40vw] h-[35vh] bg-teal-500/[0.03] blur-[120px] rounded-full pointer-events-none z-0" />
 
       {/* TOP LIVE STATUS TICKER */}
       <div className="relative z-10 w-full bg-[#0a0a0f] border-b border-white/5 py-2.5 overflow-hidden flex items-center shadow-lg shadow-black/50">
         <div className="absolute left-0 top-0 bottom-0 w-16 bg-gradient-to-r from-[#0a0a0f] to-transparent z-20" />
         <div className="absolute right-0 top-0 bottom-0 w-16 bg-gradient-to-l from-[#0a0a0f] to-transparent z-20" />
 
-        <div className="ticker-track flex items-center gap-8 text-[11px] font-mono tracking-widest text-slate-400 uppercase">
+        <div className="ticker-track flex items-center gap-4 md:gap-8 text-[9px] md:text-[11px] font-mono tracking-widest text-slate-400 uppercase">
           {[...Array(2)].map((_, i) => (
             <React.Fragment key={i}>
               <span className="flex items-center gap-2 text-emerald-400">
@@ -172,11 +173,8 @@ export default function App() {
                 V9.4 Stochastic Matrix
               </span>
             </div>
-            <h1 className="text-5xl md:text-6xl font-black tracking-tighter text-white uppercase drop-shadow-2xl animate-slide-up">
-              Route{" "}
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-orange-500 to-red-600">
-                Intelligence
-              </span>
+            <h1 className="text-3xl md:text-4xl font-semibold tracking-tight text-white animate-slide-up">
+              Route Intelligence
             </h1>
             <p
               className="text-sm text-slate-400 mt-4 font-mono max-w-xl animate-fade"
@@ -205,13 +203,13 @@ export default function App() {
         {/* INPUT CONFIGURATOR CARD */}
         <form
           onSubmit={handleSimulate}
-          className="glass-panel p-6 rounded-2xl shadow-2xl mb-12 transform transition-all hover:border-white/10 animate-slide-up"
+          className="bg-[#111116] border border-white/[0.06] p-5 md:p-6 rounded-2xl shadow-xl mb-10 transform transition-all hover:border-white/10 animate-slide-up"
           style={{ animationDelay: "0.1s" }}
         >
           <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
             <div className="md:col-span-3 relative group">
-              <label className="block text-[10px] font-mono uppercase tracking-widest text-slate-400 mb-2 ml-1">
-                Origin Node
+              <label className="block text-xs font-medium text-slate-400 mb-2 ml-1">
+                Origin
               </label>
               <div className="relative">
                 <MapPin className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
@@ -231,8 +229,8 @@ export default function App() {
             </div>
 
             <div className="md:col-span-3 relative group">
-              <label className="block text-[10px] font-mono uppercase tracking-widest text-slate-400 mb-2 ml-1">
-                Destination Node
+              <label className="block text-xs font-medium text-slate-400 mb-2 ml-1">
+                Destination
               </label>
               <div className="relative">
                 <MapPin className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
@@ -252,14 +250,14 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setTimeMode("depart_at")}
-                  className={`text-[10px] font-mono uppercase tracking-widest px-2 py-1 rounded transition-colors ${timeMode === "depart_at" ? "bg-orange-500/20 text-orange-400" : "text-slate-500 hover:text-slate-300"}`}
+                  className={`text-xs font-medium px-4 py-2.5 rounded-lg flex-1 md:flex-none transition-colors ${timeMode === "depart_at" ? "bg-orange-500/20 text-orange-400" : "text-slate-500 hover:text-slate-300"}`}
                 >
                   Depart At
                 </button>
                 <button
                   type="button"
                   onClick={() => setTimeMode("arrive_by")}
-                  className={`text-[10px] font-mono uppercase tracking-widest px-2 py-1 rounded transition-colors ${timeMode === "arrive_by" ? "bg-emerald-500/20 text-emerald-400" : "text-slate-500 hover:text-slate-300"}`}
+                  className={`text-xs font-medium px-4 py-2.5 rounded-lg flex-1 md:flex-none transition-colors ${timeMode === "arrive_by" ? "bg-emerald-500/20 text-emerald-400" : "text-slate-500 hover:text-slate-300"}`}
                 >
                   Arrive By
                 </button>
@@ -279,7 +277,7 @@ export default function App() {
               <button
                 type="submit"
                 disabled={loading}
-                className={`w-full h-[52px] bg-gradient-to-r from-orange-600 to-red-600 hover:from-orange-500 hover:to-red-500 disabled:from-slate-800 disabled:to-slate-800 text-white font-bold uppercase tracking-widest text-[11px] rounded-xl transition-all flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(234,88,12,0.3)] hover:shadow-[0_0_30px_rgba(234,88,12,0.5)] disabled:shadow-none ${loading ? "animate-pulse-glow" : ""}`}
+                className={`w-full h-12 bg-white text-[#0a0a0c] hover:bg-slate-200 disabled:bg-white/10 disabled:text-white/30 font-semibold text-sm rounded-xl transition-colors duration-150 flex items-center justify-center gap-2 ${loading ? '' : ''}`}
               >
                 {loading ? (
                   <span className="flex items-center gap-2">
@@ -292,6 +290,14 @@ export default function App() {
             </div>
           </div>
         </form>
+
+        {loading && (
+          <div className="space-y-4 mb-10 animate-pulse">
+            <div className="h-40 bg-white/[0.03] rounded-2xl border border-white/[0.04]"></div>
+            <div className="h-56 bg-white/[0.03] rounded-2xl border border-white/[0.04]"></div>
+            <div className="h-32 bg-white/[0.03] rounded-2xl border border-white/[0.04]"></div>
+          </div>
+        )}
 
         {error && (
           <div className="animate-slide-up bg-red-950/40 border border-red-500/30 text-red-200 p-4 rounded-xl mb-8 flex items-center gap-4 shadow-lg backdrop-blur-md">
@@ -397,7 +403,7 @@ export default function App() {
                         />
 
                         <div
-                          className={`bg-white/[0.02] p-4 rounded-xl border transition-all flex items-center justify-between ${step.mode === "ARRIVE" ? "border-emerald-500/30 bg-emerald-950/20" : "border-white/5 group-hover:border-white/10 group-hover:bg-white/[0.04]"}`}
+                          className={`bg-white/[0.02] p-3 md:p-4 rounded-xl border transition-all flex items-center justify-between ${step.mode === "ARRIVE" ? "border-emerald-500/30 bg-emerald-950/20" : "border-white/5 group-hover:border-white/10 group-hover:bg-white/[0.04]"}`}
                         >
                           <div className="flex items-center gap-4">
                             <div className="bg-black/50 p-2 rounded-lg border border-white/5">
@@ -433,11 +439,11 @@ export default function App() {
                           </div>
 
                           {step.mode !== "ARRIVE" && (
-                            <div className="text-right">
-                              <span className="text-white font-mono text-lg font-bold block">
+                            <div className="text-right shrink-0 ml-2">
+                              <span className="text-white font-mono text-base md:text-lg font-bold block">
                                 {step.baseline_duration.toFixed(0)}m
                               </span>
-                              <span className="text-[10px] uppercase tracking-widest text-slate-500">
+                              <span className="text-[9px] md:text-[10px] uppercase tracking-widest text-slate-500">
                                 Duration
                               </span>
                             </div>
@@ -525,37 +531,37 @@ export default function App() {
             {/* MATRIX ANALYTICS TABLE WITH VISUAL SPREAD */}
             <div className="glass-panel rounded-2xl overflow-hidden shadow-2xl mt-8">
               <div className="px-6 py-5 border-b border-white/5 bg-black/40">
-                <h3 className="text-xs font-bold uppercase tracking-widest text-slate-300 font-mono flex items-center gap-3">
+                <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-3">
                   <Activity className="w-4 h-4 text-orange-500" /> Matrix
                   Analytics Overview
                 </h3>
               </div>
-              <div className="overflow-x-auto">
+              <div className="overflow-x-auto -mx-1 md:mx-0">
                 <table className="w-full text-left border-collapse text-sm whitespace-nowrap">
                   <thead>
                     <tr className="bg-black/20 text-slate-400 border-b border-white/5 font-mono text-[10px] uppercase tracking-widest">
-                      <th className="py-4 px-6 font-semibold">Rank</th>
-                      <th className="py-4 px-6 font-semibold">
+                      <th className="py-3 px-3 md:px-5 font-semibold sticky left-0 bg-[#111116] z-10">Rank</th>
+                      <th className="py-3 px-3 md:px-5 font-semibold">
                         Route Signature
                       </th>
-                      <th className="py-4 px-6 font-semibold text-center">
+                      <th className="py-3 px-3 md:px-5 font-semibold text-center">
                         {metaData?.mode === "arrive_by"
                           ? "Req. Departure"
                           : "Win Rate"}
                       </th>
-                      <th className="py-4 px-6 font-semibold text-center">
+                      <th className="py-3 px-3 md:px-5 font-semibold text-center">
                         Typical (P50)
                       </th>
-                      <th className="py-4 px-6 font-semibold text-center">
+                      <th className="py-3 px-3 md:px-5 font-semibold text-center">
                         Budget (P90)
                       </th>
-                      <th className="py-4 px-6 font-semibold text-center hidden md:table-cell">
+                      <th className="py-3 px-3 md:px-5 font-semibold text-center hidden md:table-cell">
                         Time Spread (Min → Max)
                       </th>
-                      <th className="py-4 px-6 font-semibold text-center">
+                      <th className="py-3 px-3 md:px-5 font-semibold text-center">
                         Risk / Early
                       </th>
-                      <th className="py-4 px-6 font-semibold text-right">
+                      <th className="py-3 px-3 md:px-5 font-semibold text-right">
                         Cost
                       </th>
                     </tr>
@@ -593,7 +599,7 @@ export default function App() {
                               : "hover:bg-white/[0.03] border-l-2 border-l-transparent"
                           }`}
                         >
-                          <td className="py-4 px-6">
+                          <td className="py-3 px-3 md:px-5 sticky left-0 bg-[#111116] z-10">
                             {idx === 0 ? (
                               <span className="bg-emerald-500/20 text-emerald-400 font-mono text-[10px] px-2 py-1 rounded border border-emerald-500/30 font-bold">
                                 OPTIMAL
@@ -604,12 +610,12 @@ export default function App() {
                               </span>
                             )}
                           </td>
-                          <td className="py-4 px-6">
+                          <td className="py-3 px-3 md:px-5">
                             <div className="font-sans font-bold text-slate-200 truncate max-w-[200px] sm:max-w-xs lg:max-w-md">
                               {route.title}
                             </div>
                           </td>
-                          <td className="py-4 px-6 text-center">
+                          <td className="py-3 px-3 md:px-5 text-center">
                             {metaData?.mode === "arrive_by" ? (
                               <span className="font-mono font-bold text-orange-400 bg-orange-400/10 px-2 py-1 rounded">
                                 {route.metrics.req_departure_time}
@@ -620,14 +626,14 @@ export default function App() {
                               </span>
                             )}
                           </td>
-                          <td className="py-4 px-6 text-center font-mono text-slate-200">
+                          <td className="py-3 px-3 md:px-5 text-center font-mono text-slate-200">
                             {route.metrics.p50_mins}m
                           </td>
-                          <td className="py-4 px-6 text-center font-mono text-amber-500">
+                          <td className="py-3 px-3 md:px-5 text-center font-mono text-amber-500">
                             {route.metrics.p90_mins}m
                           </td>
 
-                          <td className="py-4 px-6 w-48 hidden md:table-cell">
+                          <td className="py-3 px-3 md:px-5 w-48 hidden md:table-cell">
                             <div className="flex items-center gap-2">
                               <span className="text-[10px] font-mono text-slate-500 w-6 text-right">
                                 {route.metrics.best_time.toFixed(0)}
@@ -661,12 +667,12 @@ export default function App() {
                             </div>
                           </td>
 
-                          <td className="py-4 px-6 text-center font-mono">
+                          <td className="py-3 px-3 md:px-5 text-center font-mono">
                             <div className="flex flex-col gap-1 items-center">
                               <span
                                 className={
                                   route.metrics.severe_risk > 25
-                                    ? "text-red-400 font-bold drop-shadow-[0_0_5px_rgba(248,113,113,0.5)]"
+                                    ? "text-red-400 font-bold"
                                     : "text-slate-400"
                                 }
                               >
@@ -677,7 +683,7 @@ export default function App() {
                               </span>
                             </div>
                           </td>
-                          <td className="py-4 px-6 text-right font-mono font-semibold text-slate-300">
+                          <td className="py-3 px-3 md:px-5 text-right font-mono font-semibold text-slate-300">
                             ${route.cost.toFixed(2)}
                           </td>
                         </tr>

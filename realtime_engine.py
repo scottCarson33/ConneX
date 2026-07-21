@@ -5,6 +5,10 @@ from datetime import datetime
 
 import requests
 from google.transit import gtfs_realtime_pb2
+import os
+
+MTA_API_KEY = os.getenv("MTA_API_KEY", "40635c2e-4f8c-4565-abf7-0e3dfdefb924")
+MTA_HEADERS = {"x-api-key": MTA_API_KEY}
 
 MTA_FEED_URLS = {
     "ACE": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-ace",
@@ -148,7 +152,7 @@ class RealtimeEngine:
 
         try:
             feed = gtfs_realtime_pb2.FeedMessage()
-            res = requests.get(url, timeout=5)
+            res = requests.get(url, headers=MTA_HEADERS, timeout=5)
             if res.status_code == 200:
                 feed.ParseFromString(res.content)
                 for entity in feed.entity:
