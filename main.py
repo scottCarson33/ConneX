@@ -19,6 +19,8 @@ from pydantic import BaseModel, Field
 
 from alternative_routes import find_alternatives, get_headway
 from realtime_engine import engine as rt_engine
+from weather_service import fetch_weather_conditions
+from transfer_times import get_transfer_walk_time
 
 # --- LOGGING & ENVIRONMENT ---
 logging.basicConfig(
@@ -680,6 +682,11 @@ def run_competitive_simulation(
 
     TRANSFER_DELAY_TOLERANCE_MINS = 2.0
 
+    # Fetch live weather conditions
+    weather = fetch_weather_conditions()
+    weather_delay_mult = weather["delay_multiplier"]
+    weather_walk_mult = weather["walk_multiplier"]
+
     for _ in range(num_trials):
         trial_durations = {}
         trial_line_offsets = {}
@@ -698,9 +705,9 @@ def run_competitive_simulation(
                 
                 # Heavy-tailed base delay (log-normal)
                 if data["has_alert"]:
-                    base_delay = np.random.lognormal(2.5, 1.0) # Mean ~20 mins, heavy tail
+                    base_delay = np.random.lognormal(2.5, 1.0) * weather_delay_mult # Mean ~20 mins, heavy tail
                 else:
-                    base_delay = np.random.lognormal(1.0, 0.8) # Mean ~3-4 mins
+                    base_delay = np.random.lognormal(1.0, 0.8) * weather_delay_mult # Mean ~3-4 mins
 
                 # Correlated delays (System Shocks)
                 hub_delay = 0.0
@@ -708,7 +715,15 @@ def run_competitive_simulation(
                     "union sq": ["L", "N", "Q", "R", "W", "4", "5", "6"],
                     "times sq": ["1", "2", "3", "7", "N", "Q", "R", "W", "S"],
                     "atlantic av": ["2", "3", "4", "5", "B", "D", "N", "Q", "R"],
-                    "fulton": ["2", "3", "4", "5", "A", "C", "J", "Z"]
+                    "fulton": ["2", "3", "4", "5", "A", "C", "J", "Z"],
+                    "14 st": ["1", "2", "3", "F", "M", "L"],
+                    "herald sq": ["B", "D", "F", "M", "N", "Q", "R", "W"],
+                    "jay st": ["A", "C", "F", "R"],
+                    "broadway jct": ["A", "C", "J", "Z", "L"],
+                    "dekalb av": ["B", "D", "N", "Q", "R"],
+                    "chambers st": ["1", "2", "3", "A", "C", "J", "Z"],
+                    "59 st columbus": ["1", "2", "A", "B", "C", "D"],
+                    "lexington 59": ["4", "5", "6", "N", "R", "W"],
                 }
                 
                 for hub, lines in hubs.items():
@@ -718,7 +733,24 @@ def run_competitive_simulation(
                             trial_hub_shocks[hub] = np.random.lognormal(3.0, 0.8) if random.random() < 0.02 else 0.0
                         hub_delay = max(hub_delay, trial_hub_shocks[hub])
 
-                trial_line_delays[line] = data["delay"] + base_delay + hub_delay
+                # Shared track correlation (express/local on same tracks)
+                shared_tracks = {
+                    "4_5_express": ["4", "5"],
+                    "2_3_express": ["2", "3"],
+                    "N_W_local_queens": ["N", "W"],
+                    "A_C_local": ["A", "C"],
+                    "B_D_express": ["B", "D"],
+                    "E_F_queens": ["E", "F"],
+                }
+                
+                track_delay = 0.0
+                for track_group, track_lines in shared_tracks.items():
+                    if line in track_lines:
+                        if track_group not in trial_hub_shocks:
+                            trial_hub_shocks[track_group] = np.random.lognormal(2.0, 0.6) if random.random() < 0.03 else 0.0
+                        track_delay = max(track_delay, trial_hub_shocks[track_group])
+
+                trial_line_delays[line] = data["delay"] + base_delay + hub_delay + track_delay
             h_second = get_headway(line, tod)
             if h_second is None:
                 return (0.0, 9999.0, 9999.0)
@@ -740,7 +772,19 @@ def run_competitive_simulation(
                 current_unix = virtual_clock.timestamp()
 
                 if mode == "WALK":
-                    leg_duration = base * random.uniform(0.92, 1.12)
+                    # Check for known transfer walk time overrides
+                    walk_base = base
+                    if step_idx > 0 and step_idx < len(route["itinerary"]) - 1:
+                        prev_step = route["itinerary"][step_idx - 1]
+                        next_step = route["itinerary"][step_idx + 1]
+                        if prev_step.get("mode") == "TRANSIT" and next_step.get("mode") == "TRANSIT":
+                            from_line = clean_line_id(prev_step.get("line_id", ""))
+                            to_line = clean_line_id(next_step.get("line_id", ""))
+                            station = next_step.get("departure_stop", "")
+                            override = get_transfer_walk_time(from_line, to_line, station)
+                            if override is not None:
+                                walk_base = override
+                    leg_duration = walk_base * random.uniform(0.92, 1.12) * weather_walk_mult
                     step_stats[route["route_index"]][step_idx]["board_unix"].append(
                         current_unix
                     )
@@ -766,14 +810,15 @@ def run_competitive_simulation(
                     arr_stop_name = step.get("arrival_stop", "")
                     line_id = clean_line_id(step.get("line_id", ""))
 
-                    if live_arrival_cache is not None:
+                    next_gtfs_arrival = None
+                    if transit_leg_count == 1 and live_arrival_cache is not None:
                         next_gtfs_arrival = next_cached_arrival(
                             live_arrival_cache.get(
                                 (route["route_index"], step_idx), []
                             ),
                             current_unix,
                         )
-                    else:
+                    elif transit_leg_count == 1:
                         dep_id = rt_engine.find_stop_id_by_name(dep_stop_name, line_id)
                         arr_id = rt_engine.find_stop_id_by_name(arr_stop_name, line_id)
                         direction = rt_engine.get_direction(dep_id, arr_id)
