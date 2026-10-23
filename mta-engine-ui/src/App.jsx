@@ -6,62 +6,56 @@ import {
   Bike,
   Footprints,
   AlertTriangle,
-  CheckCircle,
-  ChevronLeft,
-  ChevronRight,
-  Activity,
-  Zap,
-  Cpu,
-  Wifi,
   Clock,
   CalendarDays,
+  Trophy,
+  Sparkles,
+  ArrowUpDown,
+  Navigation,
+  CheckCircle2,
 } from "lucide-react";
 
 export default function App() {
-  const [origin, setOrigin] = useState("");
-  const [destination, setDestination] = useState("");
+  const [origin, setOrigin] = useState("Praça do Comércio");
+  const [destination, setDestination] = useState("Belém, Lisboa");
   const [timeMode, setTimeMode] = useState("depart_at");
   const [targetTime, setTargetTime] = useState("");
+  const [showTimePicker, setShowTimePicker] = useState(false);
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState([]);
-  const [metaData, setMetaData] = useState(null);
+  const [weatherData, setWeatherData] = useState(null);
   const [error, setError] = useState("");
   const [activeRouteIdx, setActiveRouteIdx] = useState(0);
-  const [suspendedLines, setSuspendedLines] = useState([]);
-  const [weatherData, setWeatherData] = useState(null);
 
   const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
-  // Pre-fill datetime-local with current local time
   useEffect(() => {
     const now = new Date();
-    // Format to YYYY-MM-DDThh:mm
     const offset = now.getTimezoneOffset() * 60000;
     const localISOTime = new Date(now - offset).toISOString().slice(0, 16);
     setTargetTime(localISOTime);
   }, []);
 
+  const handleSwap = () => {
+    setOrigin(destination);
+    setDestination(origin);
+  };
+
   const handleSimulate = async (e) => {
-    e.preventDefault();
+    if (e) e.preventDefault();
+    if (!origin.trim() || !destination.trim()) return;
+
     setLoading(true);
     setError("");
     setResults([]);
-    setMetaData(null);
     setActiveRouteIdx(0);
 
     try {
       let currentTarget = targetTime ? new Date(targetTime) : new Date();
       const now = new Date();
-      
-      // If the selected time is in the past, update it to right now to prevent stale simulations
-      if (currentTarget < now) {
+      if (!showTimePicker || currentTarget < now) {
         currentTarget = now;
-        const offset = now.getTimezoneOffset() * 60000;
-        const localISOTime = new Date(now - offset).toISOString().slice(0, 16);
-        setTargetTime(localISOTime);
       }
-      
-      const isoTarget = currentTarget.toISOString();
 
       const res = await fetch(`${API_BASE_URL}/api/simulate`, {
         method: "POST",
@@ -69,700 +63,457 @@ export default function App() {
         body: JSON.stringify({
           origin,
           destination,
-          target_time: isoTarget,
+          target_time: currentTarget.toISOString(),
           time_mode: timeMode,
-          suspended_lines: suspendedLines,
         }),
       });
 
-      if (!res.ok)
-        throw new Error("Telemetry feed offline or simulation failed.");
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || "Unable to find routes. Please check locations.");
+      }
 
       const data = await res.json();
-
-      if (data.status === "success") {
-        setMetaData({
-          mode: data.time_mode,
-          targetStr: data.target_time_str,
-          navegante_pass: data.navegante_pass || (data.omny_cap ? {
-            monthly_municipal: 30.00,
-            zapping_ride: 1.61,
-          } : {
-            monthly_municipal: 30.00,
-            zapping_ride: 1.61,
-          }),
-        });
+      if (data.status === "success" && data.data?.length > 0) {
         setResults(data.data);
         setWeatherData(data.weather || null);
       } else {
-        throw new Error("Simulation returned an error state.");
+        throw new Error("No routes found between these locations.");
       }
     } catch (err) {
-      setError(err.message);
+      setError(err.message || "Failed to calculate route.");
     } finally {
       setLoading(false);
     }
   };
 
-  const getModeIcon = (mode) => {
-    if (mode === "CITIBIKE")
-      return (
-        <Bike className="w-5 h-5 text-blue-400" />
-      );
-    if (mode === "WALK")
-      return <Footprints className="w-5 h-5 text-slate-400" />;
-    if (mode === "DOCKING_OVERHEAD")
-      return (
-        <Clock className="w-5 h-5 text-purple-400" />
-      );
-    if (mode === "ARRIVE")
-      return (
-        <MapPin className="w-5 h-5 text-emerald-500" />
-      );
-    return (
-      <Train className="w-5 h-5 text-orange-500" />
-    );
+  const getRankTier = (index) => {
+    if (index === 0) {
+      return {
+        label: "OPTIMAL",
+        badge: "Rank 1: Best Choice",
+        description: "Fastest travel time & highest reliability",
+        bar: "bg-emerald-500",
+        text: "text-emerald-400",
+        bg: "bg-emerald-950/20",
+        border: "border-emerald-500/25",
+        activeBg: "bg-emerald-950/40",
+        activeBorder: "border-emerald-500",
+        ring: "ring-emerald-500/30",
+        badgeBg: "bg-emerald-500/20 text-emerald-300 border-emerald-500/40",
+        dot: "bg-emerald-500 border-emerald-300 ring-emerald-500/20",
+      };
+    } else if (index === 1) {
+      return {
+        label: "GOOD",
+        badge: "Rank 2: Good Alternative",
+        description: "Solid backup with minor variance",
+        bar: "bg-sky-500",
+        text: "text-sky-400",
+        bg: "bg-sky-950/20",
+        border: "border-sky-500/25",
+        activeBg: "bg-sky-950/40",
+        activeBorder: "border-sky-500",
+        ring: "ring-sky-500/30",
+        badgeBg: "bg-sky-500/20 text-sky-300 border-sky-500/40",
+        dot: "bg-sky-500 border-sky-300 ring-sky-500/20",
+      };
+    } else if (index === 2) {
+      return {
+        label: "FAIR",
+        badge: "Rank 3: Slower / Moderate Risk",
+        description: "Higher transfer overhead or lower frequency",
+        bar: "bg-amber-500",
+        text: "text-amber-400",
+        bg: "bg-amber-950/20",
+        border: "border-amber-500/25",
+        activeBg: "bg-amber-950/40",
+        activeBorder: "border-amber-500",
+        ring: "ring-amber-500/30",
+        badgeBg: "bg-amber-500/20 text-amber-300 border-amber-500/40",
+        dot: "bg-amber-500 border-amber-300 ring-amber-500/20",
+      };
+    } else {
+      return {
+        label: "POOR",
+        badge: `Rank ${index + 1}: High Delay Risk`,
+        description: "Significant delays or indirect routing",
+        bar: "bg-rose-500",
+        text: "text-rose-400",
+        bg: "bg-rose-950/20",
+        border: "border-rose-500/25",
+        activeBg: "bg-rose-950/40",
+        activeBorder: "border-rose-500",
+        ring: "ring-rose-500/30",
+        badgeBg: "bg-rose-500/20 text-rose-300 border-rose-500/40",
+        dot: "bg-rose-500 border-rose-300 ring-rose-500/20",
+      };
+    }
   };
 
-  const nextRoute = () =>
-    setActiveRouteIdx((prev) => (prev + 1) % results.length);
-  const prevRoute = () =>
-    setActiveRouteIdx((prev) => (prev - 1 + results.length) % results.length);
+  const getModeIcon = (mode) => {
+    if (mode === "CITIBIKE") return <Bike className="w-5 h-5 text-sky-400" />;
+    if (mode === "WALK") return <Footprints className="w-5 h-5 text-slate-400" />;
+    if (mode === "ARRIVE") return <MapPin className="w-5 h-5 text-emerald-400" />;
+    return <Train className="w-5 h-5 text-amber-400" />;
+  };
 
-  const activeRoute = results[activeRouteIdx];
-
-  const MAX_CHART_MINS =
-    results.length > 0
-      ? Math.max(...results.map((r) => r.metrics.worst_time)) + 5
-      : 120;
+  const activeRoute = results[activeRouteIdx] || results[0];
+  const activeTier = activeRoute ? getRankTier(activeRouteIdx) : null;
 
   return (
-    <div className="min-h-screen bg-[#0a0a0c] text-slate-100 font-sans antialiased relative overflow-x-hidden">
-      <div className="fixed inset-0 bg-grid pointer-events-none z-0 opacity-50" />
-      <div className="absolute -top-[20%] -left-[10%] w-[60vw] h-[50vh] bg-indigo-500/[0.03] blur-[150px] rounded-full pointer-events-none z-0" />
-      <div className="absolute top-[30%] -right-[15%] w-[40vw] h-[35vh] bg-teal-500/[0.03] blur-[120px] rounded-full pointer-events-none z-0" />
+    <div className="min-h-screen bg-[#0a0a0c] text-slate-100 font-sans antialiased selection:bg-amber-500/30">
+      <div className="fixed inset-0 bg-gradient-to-b from-[#111116] via-[#0a0a0c] to-[#0a0a0c] pointer-events-none" />
 
-      {/* TOP LIVE STATUS TICKER */}
-      <div className="relative z-10 w-full bg-[#0a0a0f] border-b border-white/5 py-2.5 overflow-hidden flex items-center shadow-lg shadow-black/50">
-        <div className="absolute left-0 top-0 bottom-0 w-16 bg-gradient-to-r from-[#0a0a0f] to-transparent z-20" />
-        <div className="absolute right-0 top-0 bottom-0 w-16 bg-gradient-to-l from-[#0a0a0f] to-transparent z-20" />
-
-        <div className="ticker-track flex items-center gap-4 md:gap-8 text-[9px] md:text-[11px] font-mono tracking-widest text-slate-400 uppercase">
-          {[1, 2].map((_, idx) => (
-            <React.Fragment key={idx}>
-              <span className="text-emerald-400">Linha Azul: Serviço Normal</span>
-              <span>•</span>
-              <span className="text-emerald-400">Linha Verde: Serviço Normal</span>
-              <span>•</span>
-              <span>Linha Amarela: Serviço Normal</span>
-              <span>•</span>
-              <span>Linha Vermelha: Serviço Normal</span>
-              <span>•</span>
-              <span>CP Sintra: Em Horário</span>
-              <span>•</span>
-            </React.Fragment>
-          ))}
-        </div>
-      </div>
-
-      <div className="relative z-10 max-w-6xl mx-auto p-4 md:p-8 pt-10">
-        <header className="mb-12 text-center md:text-left flex flex-col md:flex-row md:items-end justify-between gap-6">
-          <div>
-            <div className="flex items-center justify-center md:justify-start gap-3 mb-3 animate-fade">
-              <Cpu className="w-5 h-5 text-orange-500" />
-              <span className="text-[10px] font-mono tracking-[0.2em] text-orange-500 uppercase border border-orange-500/30 bg-orange-500/10 px-3 py-1 rounded">
-                Lisbon Transit Engine
+      <main className="relative z-10 max-w-2xl mx-auto px-4 py-8 md:py-12">
+        {/* Simple Header */}
+        <header className="text-center mb-8">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/[0.04] border border-white/[0.08] text-xs text-slate-400 mb-3">
+            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+            <span>Lisbon Transit Intelligence</span>
+            {weatherData && (
+              <span className="text-slate-500 ml-1">
+                • {weatherData.description} {weatherData.temp_c ? `(${weatherData.temp_c}°C)` : ""}
               </span>
-            </div>
-            <h1 className="text-3xl md:text-4xl font-semibold tracking-tight text-white animate-slide-up">
-              Route Intelligence
-            </h1>
-            <p
-              className="text-sm text-slate-400 mt-4 font-mono max-w-xl animate-fade"
-              style={{ animationDelay: "0.2s" }}
-            >
-              <span className="text-white">2,000-trial Monte Carlo</span> • Lisbon Metro/Carris/CP • Stochastic transit simulation
-            </p>
+            )}
           </div>
-
-          <div
-            className="hidden md:flex items-center gap-4 text-xs font-mono text-slate-500 bg-[#0d0e15] border border-white/5 p-3 rounded-lg shadow-2xl animate-fade"
-            style={{ animationDelay: "0.3s" }}
-          >
-            <div className="flex flex-col items-center px-4 border-r border-white/5">
-              <Wifi className="w-4 h-4 text-emerald-500 mb-1" />
-              <span>GTFS Sync</span>
-            </div>
-            <div className="flex flex-col items-center px-4">
-              <Zap className="w-4 h-4 text-orange-500 mb-1" />
-              <span>Live Feed</span>
-            </div>
-          </div>
+          <h1 className="text-3xl md:text-4xl font-bold tracking-tight text-white">
+            Find the Best Route
+          </h1>
+          <p className="text-sm text-slate-400 mt-2">
+            Simulating Metro, Carris, CP, and Gira with ranked reliability
+          </p>
         </header>
 
-        {/* INPUT CONFIGURATOR CARD */}
+        {/* Input Card */}
         <form
           onSubmit={handleSimulate}
-          className="bg-[#111116] border border-white/[0.06] p-5 md:p-6 rounded-2xl shadow-xl mb-10 transform transition-all hover:border-white/10 animate-slide-up"
-          style={{ animationDelay: "0.1s" }}
+          className="bg-[#121217] border border-white/[0.08] rounded-2xl p-5 shadow-2xl mb-8"
         >
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
-            <div className="md:col-span-3 relative group">
-              <label className="block text-xs font-medium text-slate-400 mb-2 ml-1">
-                Origin
+          <div className="space-y-3">
+            {/* Origin */}
+            <div className="relative">
+              <label className="text-[11px] font-medium text-slate-400 uppercase tracking-wider block mb-1.5 ml-1">
+                From
               </label>
               <div className="relative">
-                <MapPin className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
+                <MapPin className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
                 <input
                   type="text"
                   required
-                  className="w-full bg-[#050508] border border-white/10 rounded-xl py-3.5 pl-11 pr-4 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 text-white placeholder-slate-600 transition-all font-medium"
-                  placeholder="e.g., Praça do Comércio"
                   value={origin}
                   onChange={(e) => setOrigin(e.target.value)}
+                  placeholder="e.g. Praça do Comércio"
+                  className="w-full bg-[#08080b] border border-white/10 rounded-xl py-3 pl-10 pr-10 text-white placeholder-slate-600 focus:outline-none focus:border-amber-500 transition-colors text-sm"
                 />
               </div>
             </div>
 
-            <div className="hidden md:flex md:col-span-1 justify-center pb-3">
-              <ArrowRight className="w-5 h-5 text-slate-600" />
+            {/* Swap Button */}
+            <div className="flex justify-end -my-1 pr-3">
+              <button
+                type="button"
+                onClick={handleSwap}
+                className="p-1.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] text-slate-400 hover:text-white transition-colors cursor-pointer"
+                title="Swap origin and destination"
+              >
+                <ArrowUpDown className="w-3.5 h-3.5" />
+              </button>
             </div>
 
-            <div className="md:col-span-3 relative group">
-              <label className="block text-xs font-medium text-slate-400 mb-2 ml-1">
-                Destination
+            {/* Destination */}
+            <div className="relative">
+              <label className="text-[11px] font-medium text-slate-400 uppercase tracking-wider block mb-1.5 ml-1">
+                To
               </label>
               <div className="relative">
-                <MapPin className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
+                <Navigation className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
                 <input
                   type="text"
                   required
-                  className="w-full bg-[#050508] border border-white/10 rounded-xl py-3.5 pl-11 pr-4 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 text-white placeholder-slate-600 transition-all font-medium"
-                  placeholder="e.g., Belém, Lisboa"
                   value={destination}
                   onChange={(e) => setDestination(e.target.value)}
+                  placeholder="e.g. Belém, Lisboa"
+                  className="w-full bg-[#08080b] border border-white/10 rounded-xl py-3 pl-10 pr-4 text-white placeholder-slate-600 focus:outline-none focus:border-amber-500 transition-colors text-sm"
                 />
               </div>
             </div>
 
-            <div className="md:col-span-3 relative group">
-              <div className="flex gap-2 mb-2 ml-1">
-                <button
-                  type="button"
-                  onClick={() => setTimeMode("depart_at")}
-                  className={`text-xs font-medium px-4 py-2.5 rounded-lg flex-1 md:flex-none transition-colors ${timeMode === "depart_at" ? "bg-orange-500/20 text-orange-400" : "text-slate-500 hover:text-slate-300"}`}
-                >
-                  Depart At
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTimeMode("arrive_by")}
-                  className={`text-xs font-medium px-4 py-2.5 rounded-lg flex-1 md:flex-none transition-colors ${timeMode === "arrive_by" ? "bg-emerald-500/20 text-emerald-400" : "text-slate-500 hover:text-slate-300"}`}
-                >
-                  Arrive By
-                </button>
-              </div>
-              <div className="relative">
-                <CalendarDays className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
-                <input
-                  type="datetime-local"
-                  className="w-full bg-[#050508] border border-white/10 rounded-xl py-3.5 pl-11 pr-2 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 text-white placeholder-slate-600 transition-all font-medium text-xs md:text-sm appearance-none"
-                  value={targetTime}
-                  onChange={(e) => setTargetTime(e.target.value)}
-                />
-              </div>
-            </div>
-
-            <div className="md:col-span-2">
+            {/* Departure Options */}
+            <div className="pt-2 flex items-center justify-between text-xs text-slate-400">
               <button
-                type="submit"
-                disabled={loading}
-                className={`w-full h-12 bg-white text-[#0a0a0c] hover:bg-slate-200 disabled:bg-white/10 disabled:text-white/30 font-semibold text-sm rounded-xl transition-colors duration-150 flex items-center justify-center gap-2 ${loading ? '' : ''}`}
+                type="button"
+                onClick={() => setShowTimePicker(!showTimePicker)}
+                className="flex items-center gap-1.5 hover:text-slate-200 transition-colors cursor-pointer"
               >
-                {loading ? (
-                  <span className="flex items-center gap-2">
-                    <Cpu className="w-4 h-4 animate-spin" /> Computing
-                  </span>
-                ) : (
-                  <>Run Engine</>
-                )}
+                <CalendarDays className="w-3.5 h-3.5 text-amber-400" />
+                <span>{showTimePicker ? "Custom time" : "Departing now"}</span>
               </button>
+              {showTimePicker && (
+                <div className="flex gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setTimeMode("depart_at")}
+                    className={`px-2 py-0.5 rounded text-[11px] cursor-pointer ${
+                      timeMode === "depart_at"
+                        ? "bg-amber-500/20 text-amber-400"
+                        : "text-slate-500"
+                    }`}
+                  >
+                    Depart
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTimeMode("arrive_by")}
+                    className={`px-2 py-0.5 rounded text-[11px] cursor-pointer ${
+                      timeMode === "arrive_by"
+                        ? "bg-emerald-500/20 text-emerald-400"
+                        : "text-slate-500"
+                    }`}
+                  >
+                    Arrive
+                  </button>
+                </div>
+              )}
             </div>
+
+            {showTimePicker && (
+              <input
+                type="datetime-local"
+                value={targetTime}
+                onChange={(e) => setTargetTime(e.target.value)}
+                className="w-full bg-[#08080b] border border-white/10 rounded-xl p-2.5 text-white text-xs"
+              />
+            )}
+
+            {/* Submit Button */}
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full mt-2 h-12 bg-white text-[#0a0a0c] hover:bg-slate-200 disabled:bg-white/10 disabled:text-slate-500 font-semibold text-sm rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg cursor-pointer"
+            >
+              {loading ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
+                  <span>Simulating Routes...</span>
+                </>
+              ) : (
+                <>
+                  <span>Show Ranked Routes</span>
+                  <ArrowRight className="w-4 h-4" />
+                </>
+              )}
+            </button>
           </div>
         </form>
 
-        {/* WHAT IF SCENARIO MODE */}
-        <div className="bg-[#111116] border border-white/[0.06] rounded-2xl p-4 md:p-5 mb-6">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-amber-400" />
-              What If Mode
-            </h3>
-            {weatherData && (
-              <span className={`text-[10px] font-mono px-2.5 py-1 rounded-full border ${
-                weatherData.delay_multiplier > 1.3
-                  ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
-                  : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-              }`}>
-                {weatherData.description} • {weatherData.delay_multiplier}x delay
-              </span>
-            )}
-          </div>
-          <p className="text-xs text-slate-500 mb-3">Toggle lines to simulate suspensions and see how your route adapts.</p>
-          <div className="flex flex-wrap gap-2">
-            {['Azul','Amarela','Verde','Vermelha','T15','T28','CP-S','CP-C','Ferry'].map(line => (
-              <button
-                key={line}
-                type="button"
-                onClick={() => setSuspendedLines(prev =>
-                  prev.includes(line) ? prev.filter(l => l !== line) : [...prev, line]
-                )}
-                className={`min-w-[2.25rem] px-2.5 h-9 rounded-lg text-xs font-bold transition-all ${
-                  suspendedLines.includes(line)
-                    ? 'bg-red-500/20 text-red-400 border border-red-500/40 ring-1 ring-red-500/20'
-                    : 'bg-white/[0.04] text-slate-400 border border-white/[0.06] hover:bg-white/[0.08] hover:text-white'
-                }`}
-              >
-                {line}
-              </button>
-            ))}
-          </div>
-          {suspendedLines.length > 0 && (
-            <div className="mt-3 flex items-center gap-2">
-              <span className="text-[10px] font-mono text-red-400">Suspended: {suspendedLines.join(', ')}</span>
-              <button
-                type="button"
-                onClick={() => setSuspendedLines([])}
-                className="text-[10px] text-slate-500 hover:text-white underline"
-              >
-                Clear all
-              </button>
-            </div>
-          )}
-        </div>
-
-        {loading && (
-          <div className="space-y-4 mb-10 animate-pulse">
-            <div className="h-40 bg-white/[0.03] rounded-2xl border border-white/[0.04]"></div>
-            <div className="h-56 bg-white/[0.03] rounded-2xl border border-white/[0.04]"></div>
-            <div className="h-32 bg-white/[0.03] rounded-2xl border border-white/[0.04]"></div>
-          </div>
-        )}
-
+        {/* Error message */}
         {error && (
-          <div className="animate-slide-up bg-red-950/40 border border-red-500/30 text-red-200 p-4 rounded-xl mb-8 flex items-center gap-4 shadow-lg backdrop-blur-md">
-            <div className="bg-red-500/20 p-2 rounded-lg">
-              <AlertTriangle className="w-5 h-5 text-red-500" />
-            </div>
-            <p className="font-mono text-sm">{error}</p>
+          <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 mb-6 flex items-center gap-3 text-red-300 text-sm">
+            <AlertTriangle className="w-5 h-5 shrink-0 text-red-400" />
+            <p>{error}</p>
           </div>
         )}
 
-        {results.length > 0 && (
-          <div className="space-y-8 animate-slide-up">
-            {metaData && (
-              <div
-                className={`border rounded-lg px-4 py-3 flex items-center gap-3 backdrop-blur-md animate-fade ${metaData.mode === "arrive_by" ? "bg-emerald-950/20 border-emerald-500/30" : "bg-[#0c0d16]/80 border-orange-500/30"}`}
-              >
-                <Clock
-                  className={`w-5 h-5 ${metaData.mode === "arrive_by" ? "text-emerald-500" : "text-orange-500"}`}
-                />
-                <span className="text-xs text-slate-300 uppercase tracking-widest font-mono">
-                  {metaData.mode === "arrive_by"
-                    ? "Target Arrival: "
-                    : "Departure Base: "}
-                  <span className="text-white font-bold ml-1">
-                    {metaData.targetStr}
-                  </span>
-                </span>
+        {/* Results */}
+        {results.length > 0 && activeRoute && (
+          <div className="space-y-6">
+            {/* Color-Coded Route Rankings */}
+            <div>
+              <div className="flex items-center justify-between text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3 px-1">
+                <span>Route Rankings (Color-Coded)</span>
+                <span className="text-slate-500 lowercase font-normal">click to inspect</span>
               </div>
-            )}
 
-            <div className="glass-panel rounded-2xl overflow-hidden shadow-2xl shadow-black">
-              <div className="bg-white/[0.02] px-6 py-4 border-b border-white/5 flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  <span className="text-[11px] font-mono bg-black border border-white/10 text-slate-300 px-3 py-1.5 rounded-md">
-                    Simulation Route {activeRouteIdx + 1} / {results.length}
+              <div className="space-y-2.5">
+                {results.map((r, idx) => {
+                  const tier = getRankTier(idx);
+                  const isSelected = idx === activeRouteIdx;
+
+                  return (
+                    <div
+                      key={idx}
+                      onClick={() => setActiveRouteIdx(idx)}
+                      className={`cursor-pointer rounded-xl p-3.5 border transition-all relative overflow-hidden flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                        isSelected
+                          ? `${tier.activeBg} ${tier.activeBorder} ring-2 ${tier.ring} shadow-lg`
+                          : `${tier.bg} ${tier.border} hover:border-white/20`
+                      }`}
+                    >
+                      {/* Left color bar */}
+                      <div className={`absolute left-0 top-0 bottom-0 w-1.5 ${tier.bar}`} />
+
+                      <div className="flex items-start sm:items-center gap-3 pl-2.5">
+                        <span
+                          className={`inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-md border font-mono shrink-0 ${tier.badgeBg}`}
+                        >
+                          {idx === 0 && <Trophy className="w-3.5 h-3.5 text-emerald-400" />}
+                          #{idx + 1} {tier.label}
+                        </span>
+
+                        <div>
+                          <div className="font-semibold text-sm text-white flex items-center gap-2">
+                            <span>{r.title}</span>
+                            {isSelected && (
+                              <span className="text-[10px] font-semibold text-white bg-white/15 px-1.5 py-0.5 rounded">
+                                Viewing
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs text-slate-400 mt-0.5">
+                            {tier.description}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-4 pl-2.5 sm:pl-0 sm:justify-end text-right shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-white/5">
+                        <div>
+                          <span className="text-[10px] text-slate-500 uppercase block font-medium">Time</span>
+                          <span className="font-bold text-white font-mono text-sm">{r.metrics.p50_mins}m</span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-slate-500 uppercase block font-medium">Reliability</span>
+                          <span className={`font-bold font-mono text-sm ${tier.text}`}>{r.metrics.win_rate}%</span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-slate-500 uppercase block font-medium">Fare</span>
+                          <span className="font-bold text-slate-300 font-mono text-sm">€{r.cost.toFixed(2)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Selected Route Step-by-Step Directions */}
+            <div className="bg-[#121217] border border-white/[0.08] rounded-2xl overflow-hidden shadow-2xl">
+              {/* Header with active rank tier color accent */}
+              <div className={`p-5 border-b border-white/[0.06] ${activeTier.bg}`}>
+                <div className="flex items-center justify-between mb-2">
+                  <span
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold border ${activeTier.badgeBg}`}
+                  >
+                    {activeRouteIdx === 0 && <Trophy className="w-3 h-3 text-emerald-400" />}
+                    {activeTier.badge}
                   </span>
-                  {activeRouteIdx === 0 && (
-                    <span className="bg-emerald-500/10 text-emerald-400 text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 rounded-md border border-emerald-500/30 flex items-center gap-1.5 drop-shadow-[0_0_8px_rgba(16,185,129,0.5)]">
-                      <CheckCircle className="w-3.5 h-3.5" /> Optimal Vector
+                  <span className={`text-xs font-mono font-bold ${activeTier.text}`}>
+                    {activeRoute.metrics.win_rate}% On-Time Win Rate
+                  </span>
+                </div>
+
+                <h2 className="text-xl md:text-2xl font-bold text-white tracking-tight">
+                  {activeRoute.title}
+                </h2>
+
+                {/* Key metrics grid */}
+                <div className="grid grid-cols-3 gap-2 mt-4 pt-4 border-t border-white/[0.06] text-center">
+                  <div className="bg-white/[0.02] rounded-xl p-2.5">
+                    <span className="text-[10px] text-slate-400 uppercase tracking-wider block font-medium">
+                      Trip Duration
                     </span>
-                  )}
-                </div>
+                    <span className="text-lg font-bold text-white font-mono">
+                      {activeRoute.metrics.p50_mins}
+                      <span className="text-xs font-normal text-slate-400 ml-0.5">min</span>
+                    </span>
+                  </div>
 
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={prevRoute}
-                    className="p-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/5 text-slate-300 transition-all hover:scale-105 active:scale-95"
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={nextRoute}
-                    className="p-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/5 text-slate-300 transition-all hover:scale-105 active:scale-95"
-                  >
-                    <ChevronRight className="w-4 h-4" />
-                  </button>
+                  <div className="bg-white/[0.02] rounded-xl p-2.5">
+                    <span className="text-[10px] text-slate-400 uppercase tracking-wider block font-medium">
+                      Est. Arrival
+                    </span>
+                    <span className="text-lg font-bold text-emerald-400 font-mono">
+                      {activeRoute.metrics.est_arrival_time}
+                    </span>
+                  </div>
+
+                  <div className="bg-white/[0.02] rounded-xl p-2.5">
+                    <span className="text-[10px] text-slate-400 uppercase tracking-wider block font-medium">
+                      Fare
+                    </span>
+                    <span className="text-lg font-bold text-slate-200 font-mono">
+                      €{activeRoute.cost.toFixed(2)}
+                    </span>
+                  </div>
                 </div>
               </div>
 
-              <div
-                key={activeRouteIdx}
-                className="p-6 md:p-8 grid grid-cols-1 lg:grid-cols-12 gap-10 animate-fade"
-              >
-                <div className="lg:col-span-7">
-                  <div className="mb-8">
-                    <h3 className="text-3xl font-black text-white tracking-tight mb-2 drop-shadow-md">
-                      {activeRoute.title}
-                    </h3>
-                  </div>
+              {/* Step-by-step Itinerary */}
+              <div className="p-5">
+                <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">
+                  Step-by-Step Directions
+                </h3>
 
-                  <div className="mb-6 flex flex-col md:flex-row items-center gap-4 bg-gradient-to-r from-orange-500/10 to-emerald-500/10 p-5 rounded-xl border border-white/10">
-                    <div className="flex-1 flex items-center gap-4 border-r border-white/10 pr-4">
-                      <Clock className="w-6 h-6 text-orange-500" />
-                      <div>
-                        <span className="text-[10px] uppercase tracking-widest text-slate-500 font-mono block">
-                          {metaData?.mode === "arrive_by"
-                            ? "Required Departure (P90)"
-                            : "Departure Time"}
-                        </span>
-                        <span className="font-bold text-white font-mono text-lg">
-                          {activeRoute.metrics.req_departure_time}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="flex-1 flex items-center justify-end gap-4 pl-4">
-                      <div className="text-right">
-                        <span className="text-[10px] uppercase tracking-widest text-slate-500 font-mono block">
-                          Est. Final Arrival
-                        </span>
-                        <span className="font-bold text-emerald-400 font-mono text-lg">
-                          {activeRoute.metrics.est_arrival_time}
-                        </span>
-                      </div>
-                      <CheckCircle className="w-6 h-6 text-emerald-500" />
-                    </div>
-                  </div>
+                <div className="relative pl-6 space-y-5 before:absolute before:left-2.5 before:top-3 before:bottom-3 before:w-0.5 before:bg-white/[0.08]">
+                  {activeRoute.itinerary.map((step, idx) => {
+                    const isArrive = step.mode === "ARRIVE";
+                    const isTransit = step.mode === "TRANSIT";
 
-                  <div className="relative border-l-2 border-[#1f202e] ml-4 space-y-6">
-                    {activeRoute.itinerary.map((step, sIdx) => (
-                      <div key={sIdx} className="relative pl-8 group">
+                    return (
+                      <div key={idx} className="relative group">
+                        {/* Dot indicator matching active rank tier */}
                         <div
-                          className={`absolute -left-[9px] top-1.5 w-4 h-4 rounded-full bg-[#030305] border-2 z-10 transition-all ${step.mode === "ARRIVE" ? "border-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.8)]" : "border-slate-600 group-hover:border-orange-500 group-hover:shadow-[0_0_10px_rgba(234,88,12,0.8)]"}`}
+                          className={`absolute -left-[19px] top-1.5 w-3.5 h-3.5 rounded-full border-2 transition-all ${
+                            isArrive
+                              ? "bg-emerald-500 border-emerald-300 ring-4 ring-emerald-500/20"
+                              : isTransit
+                              ? activeTier.dot
+                              : "bg-[#121217] border-slate-500"
+                          }`}
                         />
 
-                        <div
-                          className={`bg-white/[0.02] p-3 md:p-4 rounded-xl border transition-all flex items-center justify-between ${step.mode === "ARRIVE" ? "border-emerald-500/30 bg-emerald-950/20" : "border-white/5 group-hover:border-white/10 group-hover:bg-white/[0.04]"}`}
-                        >
-                          <div className="flex items-center gap-4">
-                            <div className="bg-black/50 p-2 rounded-lg border border-white/5">
+                        {/* Step Card */}
+                        <div className="bg-white/[0.02] border border-white/[0.04] rounded-xl p-3.5 flex items-start justify-between gap-3 hover:border-white/[0.1] transition-colors">
+                          <div className="flex items-start gap-3">
+                            <div className="p-2 rounded-lg bg-white/[0.04] shrink-0 mt-0.5">
                               {getModeIcon(step.mode)}
                             </div>
                             <div>
-                              <span
-                                className={`font-bold text-sm block ${step.mode === "ARRIVE" ? "text-emerald-400" : "text-slate-100"}`}
-                              >
+                              <div className="font-semibold text-sm text-white">
                                 {step.line_display}
-                              </span>
+                              </div>
 
-                              {step.mode === "TRANSIT" ? (
-                                <span className="text-slate-400 font-mono text-[11px] mt-1 flex items-center gap-2">
-                                  <span className="text-orange-400 font-bold">
-                                    Wait: ~{step.expected_wait_mins}m
-                                  </span>
-                                  <span>•</span>
-                                  <span className="text-emerald-400">
-                                    Board: {step.expected_board_time}
-                                  </span>
-                                </span>
-                              ) : step.mode === "ARRIVE" ? (
-                                <span className="text-emerald-400 font-mono text-[11px] mt-1 block">
-                                  Est. Arrival: {step.expected_board_time}
-                                </span>
-                              ) : (
-                                <span className="text-slate-500 font-mono text-[11px] mt-1 block">
-                                  Start: {step.expected_board_time}
-                                </span>
+                              {isTransit && (
+                                <div className="text-xs text-slate-400 mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                                  {step.departure_stop && step.departure_stop !== "N/A" && (
+                                    <span>From {step.departure_stop}</span>
+                                  )}
+                                  {step.expected_board_time && (
+                                    <span className="text-amber-400 font-mono font-medium">
+                                      Board at {step.expected_board_time}
+                                    </span>
+                                  )}
+                                  {step.expected_wait_mins > 0 && (
+                                    <span className="text-slate-500">
+                                      (~{step.expected_wait_mins}m wait)
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+
+                              {isArrive && (
+                                <div className="text-xs text-emerald-400 mt-0.5 font-mono">
+                                  Arrive at destination: {step.expected_board_time}
+                                </div>
                               )}
                             </div>
                           </div>
 
-                          {step.mode !== "ARRIVE" && (
-                            <div className="text-right shrink-0 ml-2">
-                              <span className="text-white font-mono text-base md:text-lg font-bold block">
-                                {step.baseline_duration.toFixed(0)}m
-                              </span>
-                              <span className="text-[9px] md:text-[10px] uppercase tracking-widest text-slate-500">
-                                Duration
-                              </span>
-                            </div>
+                          {!isArrive && step.baseline_duration > 0 && (
+                            <span className="text-xs font-mono font-semibold text-slate-400 shrink-0 bg-white/[0.03] px-2 py-1 rounded">
+                              {Math.round(step.baseline_duration)} min
+                            </span>
                           )}
                         </div>
                       </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="lg:col-span-5">
-                  <div className="bg-[#050508] rounded-2xl p-6 border border-white/10 shadow-inner h-full flex flex-col relative overflow-hidden">
-                    <Activity className="absolute -right-10 -bottom-10 w-48 h-48 text-white/[0.02] pointer-events-none" />
-
-                    <h4 className="text-[11px] font-bold uppercase tracking-widest text-slate-400 mb-6 font-mono flex items-center gap-2">
-                      <Zap className="w-4 h-4 text-orange-500" /> Statistical
-                      Telemetry
-                    </h4>
-
-                    <div className="grid grid-cols-2 gap-4 mb-6">
-                      <div className="bg-white/[0.03] p-4 rounded-xl border border-white/5 relative overflow-hidden group hover:border-emerald-500/30 transition-colors">
-                        <div className="absolute top-0 left-0 w-full h-1 bg-emerald-500/20 group-hover:bg-emerald-500/50 transition-colors" />
-                        <span className="text-[10px] uppercase tracking-widest text-slate-500 block mb-1 font-mono">
-                          Win Rate
-                        </span>
-                        <span className="text-4xl font-black text-emerald-400 drop-shadow-[0_0_10px_rgba(52,211,153,0.3)]">
-                          {activeRoute.metrics.win_rate}%
-                        </span>
-                      </div>
-                      <div className="bg-white/[0.03] p-4 rounded-xl border border-white/5 relative overflow-hidden group hover:border-white/20 transition-colors">
-                        <div className="absolute top-0 left-0 w-full h-1 bg-white/10 group-hover:bg-white/20 transition-colors" />
-                        <span className="text-[10px] uppercase tracking-widest text-slate-500 block mb-1 font-mono">
-                          Typical (P50)
-                        </span>
-                        <span className="text-4xl font-black text-white">
-                          {activeRoute.metrics.p50_mins}
-                        </span>
-                        <span className="text-slate-500 font-mono text-sm ml-1">
-                          m
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="space-y-1 mt-auto">
-                      <div className="flex justify-between items-center py-3 border-b border-white/5 group hover:bg-white/[0.02] px-2 rounded transition-colors">
-                        <span className="text-xs text-slate-400 uppercase tracking-wider">
-                          Budgeted (P90)
-                        </span>
-                        <span className="font-mono font-bold text-amber-500 drop-shadow-[0_0_5px_rgba(245,158,11,0.5)]">
-                          {activeRoute.metrics.p90_mins}m
-                        </span>
-                      </div>
-                      <div className="flex justify-between items-center py-3 border-b border-white/5 group hover:bg-white/[0.02] px-2 rounded transition-colors">
-                        <span className="text-xs text-slate-400 uppercase tracking-wider">
-                          Predictability (IQR)
-                        </span>
-                        <span className="font-mono font-bold text-purple-400 drop-shadow-[0_0_5px_rgba(168,85,247,0.5)]">
-                          ±{activeRoute.metrics.iqr_mins}m
-                        </span>
-                      </div>
-                      <div className="flex justify-between items-center py-3 border-b border-white/5 group hover:bg-white/[0.02] px-2 rounded transition-colors">
-                        <span className="text-xs text-slate-400 uppercase tracking-wider">
-                          Operating Cost
-                        </span>
-                        <span className="font-mono font-bold text-emerald-400">
-                          €{activeRoute.cost.toFixed(2)}
-                        </span>
-                      </div>
-                      <div className="flex justify-between items-center py-3 px-2">
-                        <span className="text-xs text-slate-400 uppercase tracking-wider">
-                          Time Envelope
-                        </span>
-                        <span className="text-slate-300 font-mono text-xs bg-black px-2 py-1 rounded border border-white/10">
-                          {activeRoute.metrics.best_time}m{" "}
-                          <span className="text-slate-600 mx-1">→</span>{" "}
-                          {activeRoute.metrics.worst_time}m
-                        </span>
-                      </div>
-                    </div>
-                  </div>
+                    );
+                  })}
                 </div>
               </div>
-            </div>
-
-            {/* MATRIX ANALYTICS TABLE WITH VISUAL SPREAD */}
-            <div className="glass-panel rounded-2xl overflow-hidden shadow-2xl mt-8">
-              <div className="px-6 py-5 border-b border-white/5 bg-black/40">
-                <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-3">
-                  <Activity className="w-4 h-4 text-orange-500" /> Matrix
-                  Analytics Overview
-                </h3>
-              </div>
-              <div className="overflow-x-auto -mx-1 md:mx-0">
-                <table className="w-full text-left border-collapse text-sm whitespace-nowrap">
-                  <thead>
-                    <tr className="bg-black/20 text-slate-400 border-b border-white/5 font-mono text-[10px] uppercase tracking-widest">
-                      <th className="py-3 px-3 md:px-5 font-semibold sticky left-0 bg-[#111116] z-10">Rank</th>
-                      <th className="py-3 px-3 md:px-5 font-semibold">
-                        Route Signature
-                      </th>
-                      <th className="py-3 px-3 md:px-5 font-semibold text-center">
-                        {metaData?.mode === "arrive_by"
-                          ? "Req. Departure"
-                          : "Win Rate"}
-                      </th>
-                      <th className="py-3 px-3 md:px-5 font-semibold text-center">
-                        Typical (P50)
-                      </th>
-                      <th className="py-3 px-3 md:px-5 font-semibold text-center">
-                        Budget (P90)
-                      </th>
-                      <th className="py-3 px-3 md:px-5 font-semibold text-center hidden md:table-cell">
-                        Time Spread (Min → Max)
-                      </th>
-                      <th className="py-3 px-3 md:px-5 font-semibold text-center">
-                        Risk / Early
-                      </th>
-                      <th className="py-3 px-3 md:px-5 font-semibold text-right">
-                        Cost
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-white/5">
-                    {results.map((route, idx) => {
-                      const bestPct = Math.min(
-                        (route.metrics.best_time / MAX_CHART_MINS) * 100,
-                        100,
-                      );
-                      const worstPct = Math.min(
-                        (route.metrics.worst_time / MAX_CHART_MINS) * 100,
-                        100,
-                      );
-                      const p25Pct = Math.min(
-                        (route.metrics.p25_mins / MAX_CHART_MINS) * 100,
-                        100,
-                      );
-                      const p75Pct = Math.min(
-                        (route.metrics.p75_mins / MAX_CHART_MINS) * 100,
-                        100,
-                      );
-                      const p50Pct = Math.min(
-                        (route.metrics.p50_mins / MAX_CHART_MINS) * 100,
-                        100,
-                      );
-
-                      return (
-                        <tr
-                          key={idx}
-                          onClick={() => setActiveRouteIdx(idx)}
-                          className={`cursor-pointer transition-all duration-200 ${
-                            idx === activeRouteIdx
-                              ? "bg-orange-500/10 border-l-2 border-l-orange-500"
-                              : "hover:bg-white/[0.03] border-l-2 border-l-transparent"
-                          }`}
-                        >
-                          <td className="py-3 px-3 md:px-5 sticky left-0 bg-[#111116] z-10">
-                            {idx === 0 ? (
-                              <span className="bg-emerald-500/20 text-emerald-400 font-mono text-[10px] px-2 py-1 rounded border border-emerald-500/30 font-bold">
-                                OPTIMAL
-                              </span>
-                            ) : (
-                              <span className="font-mono text-slate-500 font-bold ml-2">
-                                #{idx + 1}
-                              </span>
-                            )}
-                          </td>
-                          <td className="py-3 px-3 md:px-5">
-                            <div className="font-sans font-bold text-slate-200 truncate max-w-[200px] sm:max-w-xs lg:max-w-md">
-                              {route.title}
-                            </div>
-                          </td>
-                          <td className="py-3 px-3 md:px-5 text-center">
-                            {metaData?.mode === "arrive_by" ? (
-                              <span className="font-mono font-bold text-orange-400 bg-orange-400/10 px-2 py-1 rounded">
-                                {route.metrics.req_departure_time}
-                              </span>
-                            ) : (
-                              <span className="font-mono font-bold text-emerald-400 bg-emerald-400/10 px-2 py-1 rounded">
-                                {route.metrics.win_rate}%
-                              </span>
-                            )}
-                          </td>
-                          <td className="py-3 px-3 md:px-5 text-center font-mono text-slate-200">
-                            {route.metrics.p50_mins}m
-                          </td>
-                          <td className="py-3 px-3 md:px-5 text-center font-mono text-amber-500">
-                            {route.metrics.p90_mins}m
-                          </td>
-
-                          <td className="py-3 px-3 md:px-5 w-48 hidden md:table-cell">
-                            <div className="flex items-center gap-2">
-                              <span className="text-[10px] font-mono text-slate-500 w-6 text-right">
-                                {route.metrics.best_time.toFixed(0)}
-                              </span>
-                              <div className="relative w-full h-1.5 bg-white/5 rounded-full overflow-visible">
-                                <div
-                                  className="absolute h-full bg-slate-600/50 rounded-full"
-                                  style={{
-                                    left: `${bestPct}%`,
-                                    right: `${100 - worstPct}%`,
-                                  }}
-                                />
-                                <div
-                                  className={`absolute h-1.5 top-0 rounded-full ${route.metrics.severe_risk > 25 ? "bg-gradient-to-r from-orange-500 to-red-500" : "bg-gradient-to-r from-emerald-500 to-orange-400"}`}
-                                  style={{
-                                    left: `${p25Pct}%`,
-                                    right: `${100 - p75Pct}%`,
-                                  }}
-                                />
-                                <div
-                                  className="absolute w-1 h-3 bg-white rounded-sm -top-[3px] shadow-[0_0_5px_rgba(255,255,255,0.8)]"
-                                  style={{
-                                    left: `${p50Pct}%`,
-                                    transform: "translateX(-50%)",
-                                  }}
-                                />
-                              </div>
-                              <span className="text-[10px] font-mono text-slate-500 w-6">
-                                {route.metrics.worst_time.toFixed(0)}
-                              </span>
-                            </div>
-                          </td>
-
-                          <td className="py-3 px-3 md:px-5 text-center font-mono">
-                            <div className="flex flex-col gap-1 items-center">
-                              <span
-                                className={
-                                  route.metrics.severe_risk > 25
-                                    ? "text-red-400 font-bold"
-                                    : "text-slate-400"
-                                }
-                              >
-                                {route.metrics.severe_risk}%
-                              </span>
-                              <span className="text-[9px] text-emerald-400 opacity-80">
-                                {route.metrics.early_prob}%
-                              </span>
-                            </div>
-                          </td>
-                          <td className="py-3 px-3 md:px-5 text-right">
-                            <span className="font-mono font-semibold text-slate-300 block">
-                              €{route.cost.toFixed(2)}
-                            </span>
-                            {route.co2_saved_kg > 0 && (
-                              <span className="text-[9px] text-emerald-400 font-mono block mt-0.5">
-                                -{route.co2_saved_kg}kg CO₂
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-              {metaData?.navegante_pass && (
-                <div className="px-5 py-3 border-t border-white/5 flex items-center justify-between text-xs">
-                  <span className="text-slate-500 font-mono">
-                    Navegante Municipal: €{metaData.navegante_pass.monthly_municipal}/mês
-                  </span>
-                  <span className="text-slate-400 font-mono">
-                    Zapping: €{metaData.navegante_pass.zapping_ride}/viagem
-                  </span>
-                </div>
-              )}
             </div>
           </div>
         )}
-      </div>
+      </main>
     </div>
   );
 }
