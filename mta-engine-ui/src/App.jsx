@@ -27,6 +27,8 @@ export default function App() {
   const [metaData, setMetaData] = useState(null);
   const [error, setError] = useState("");
   const [activeRouteIdx, setActiveRouteIdx] = useState(0);
+  const [suspendedLines, setSuspendedLines] = useState([]);
+  const [weatherData, setWeatherData] = useState(null);
 
   const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -69,6 +71,7 @@ export default function App() {
           destination,
           target_time: isoTarget,
           time_mode: timeMode,
+          suspended_lines: suspendedLines,
         }),
       });
 
@@ -81,8 +84,16 @@ export default function App() {
         setMetaData({
           mode: data.time_mode,
           targetStr: data.target_time_str,
+          navegante_pass: data.navegante_pass || (data.omny_cap ? {
+            monthly_municipal: 30.00,
+            zapping_ride: 1.61,
+          } : {
+            monthly_municipal: 30.00,
+            zapping_ride: 1.61,
+          }),
         });
         setResults(data.data);
+        setWeatherData(data.weather || null);
       } else {
         throw new Error("Simulation returned an error state.");
       }
@@ -137,27 +148,17 @@ export default function App() {
         <div className="absolute right-0 top-0 bottom-0 w-16 bg-gradient-to-l from-[#0a0a0f] to-transparent z-20" />
 
         <div className="ticker-track flex items-center gap-4 md:gap-8 text-[9px] md:text-[11px] font-mono tracking-widest text-slate-400 uppercase">
-          {[...Array(2)].map((_, i) => (
-            <React.Fragment key={i}>
-              <span className="flex items-center gap-2 text-emerald-400">
-                <div className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                </div>
-                System Online
-              </span>
+          {[1, 2].map((_, idx) => (
+            <React.Fragment key={idx}>
+              <span className="text-emerald-400">Linha Azul: Serviço Normal</span>
               <span>•</span>
-              <span className="text-orange-400">
-                N/Q/R/W: Delays (Earlier Incident)
-              </span>
+              <span className="text-emerald-400">Linha Verde: Serviço Normal</span>
               <span>•</span>
-              <span>L: Good Service</span>
+              <span>Linha Amarela: Serviço Normal</span>
               <span>•</span>
-              <span>G: Good Service</span>
+              <span>Linha Vermelha: Serviço Normal</span>
               <span>•</span>
-              <span className="text-yellow-400">B/D/F/M: Moderate Delays</span>
-              <span>•</span>
-              <span>LIRR: On/Close to Schedule</span>
+              <span>CP Sintra: Em Horário</span>
               <span>•</span>
             </React.Fragment>
           ))}
@@ -170,7 +171,7 @@ export default function App() {
             <div className="flex items-center justify-center md:justify-start gap-3 mb-3 animate-fade">
               <Cpu className="w-5 h-5 text-orange-500" />
               <span className="text-[10px] font-mono tracking-[0.2em] text-orange-500 uppercase border border-orange-500/30 bg-orange-500/10 px-3 py-1 rounded">
-                V9.4 Stochastic Matrix
+                Lisbon Transit Engine
               </span>
             </div>
             <h1 className="text-3xl md:text-4xl font-semibold tracking-tight text-white animate-slide-up">
@@ -180,8 +181,7 @@ export default function App() {
               className="text-sm text-slate-400 mt-4 font-mono max-w-xl animate-fade"
               style={{ animationDelay: "0.2s" }}
             >
-              <span className="text-white">5,000-trial Monte Carlo</span> • Live
-              MTA telemetry active • Dynamic pivot graph routing
+              <span className="text-white">2,000-trial Monte Carlo</span> • Lisbon Metro/Carris/CP • Stochastic transit simulation
             </p>
           </div>
 
@@ -217,7 +217,7 @@ export default function App() {
                   type="text"
                   required
                   className="w-full bg-[#050508] border border-white/10 rounded-xl py-3.5 pl-11 pr-4 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 text-white placeholder-slate-600 transition-all font-medium"
-                  placeholder="e.g., Grand Central Terminal"
+                  placeholder="e.g., Praça do Comércio"
                   value={origin}
                   onChange={(e) => setOrigin(e.target.value)}
                 />
@@ -238,7 +238,7 @@ export default function App() {
                   type="text"
                   required
                   className="w-full bg-[#050508] border border-white/10 rounded-xl py-3.5 pl-11 pr-4 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 text-white placeholder-slate-600 transition-all font-medium"
-                  placeholder="e.g., Brooklyn Bridge"
+                  placeholder="e.g., Belém, Lisboa"
                   value={destination}
                   onChange={(e) => setDestination(e.target.value)}
                 />
@@ -290,6 +290,56 @@ export default function App() {
             </div>
           </div>
         </form>
+
+        {/* WHAT IF SCENARIO MODE */}
+        <div className="bg-[#111116] border border-white/[0.06] rounded-2xl p-4 md:p-5 mb-6">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-400" />
+              What If Mode
+            </h3>
+            {weatherData && (
+              <span className={`text-[10px] font-mono px-2.5 py-1 rounded-full border ${
+                weatherData.delay_multiplier > 1.3
+                  ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
+                  : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+              }`}>
+                {weatherData.description} • {weatherData.delay_multiplier}x delay
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-slate-500 mb-3">Toggle lines to simulate suspensions and see how your route adapts.</p>
+          <div className="flex flex-wrap gap-2">
+            {['Azul','Amarela','Verde','Vermelha','T15','T28','CP-S','CP-C','Ferry'].map(line => (
+              <button
+                key={line}
+                type="button"
+                onClick={() => setSuspendedLines(prev =>
+                  prev.includes(line) ? prev.filter(l => l !== line) : [...prev, line]
+                )}
+                className={`min-w-[2.25rem] px-2.5 h-9 rounded-lg text-xs font-bold transition-all ${
+                  suspendedLines.includes(line)
+                    ? 'bg-red-500/20 text-red-400 border border-red-500/40 ring-1 ring-red-500/20'
+                    : 'bg-white/[0.04] text-slate-400 border border-white/[0.06] hover:bg-white/[0.08] hover:text-white'
+                }`}
+              >
+                {line}
+              </button>
+            ))}
+          </div>
+          {suspendedLines.length > 0 && (
+            <div className="mt-3 flex items-center gap-2">
+              <span className="text-[10px] font-mono text-red-400">Suspended: {suspendedLines.join(', ')}</span>
+              <button
+                type="button"
+                onClick={() => setSuspendedLines([])}
+                className="text-[10px] text-slate-500 hover:text-white underline"
+              >
+                Clear all
+              </button>
+            </div>
+          )}
+        </div>
 
         {loading && (
           <div className="space-y-4 mb-10 animate-pulse">
@@ -509,7 +559,7 @@ export default function App() {
                           Operating Cost
                         </span>
                         <span className="font-mono font-bold text-emerald-400">
-                          ${activeRoute.cost.toFixed(2)}
+                          €{activeRoute.cost.toFixed(2)}
                         </span>
                       </div>
                       <div className="flex justify-between items-center py-3 px-2">
@@ -683,8 +733,15 @@ export default function App() {
                               </span>
                             </div>
                           </td>
-                          <td className="py-3 px-3 md:px-5 text-right font-mono font-semibold text-slate-300">
-                            ${route.cost.toFixed(2)}
+                          <td className="py-3 px-3 md:px-5 text-right">
+                            <span className="font-mono font-semibold text-slate-300 block">
+                              €{route.cost.toFixed(2)}
+                            </span>
+                            {route.co2_saved_kg > 0 && (
+                              <span className="text-[9px] text-emerald-400 font-mono block mt-0.5">
+                                -{route.co2_saved_kg}kg CO₂
+                              </span>
+                            )}
                           </td>
                         </tr>
                       );
@@ -692,6 +749,16 @@ export default function App() {
                   </tbody>
                 </table>
               </div>
+              {metaData?.navegante_pass && (
+                <div className="px-5 py-3 border-t border-white/5 flex items-center justify-between text-xs">
+                  <span className="text-slate-500 font-mono">
+                    Navegante Municipal: €{metaData.navegante_pass.monthly_municipal}/mês
+                  </span>
+                  <span className="text-slate-400 font-mono">
+                    Zapping: €{metaData.navegante_pass.zapping_ride}/viagem
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         )}

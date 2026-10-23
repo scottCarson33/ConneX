@@ -9,69 +9,70 @@ logger = logging.getLogger(__name__)
 _weather_cache: Dict = {"data": None, "timestamp": 0}
 WEATHER_CACHE_TTL = 900  # 15 minutes
 
-# NWS API for NYC (Central Park station)
-NWS_STATION_URL = "https://api.weather.gov/stations/KNYC/observations/latest"
+# Lisbon weather via Open-Meteo (free, no key needed)
+WEATHER_URL = "https://api.open-meteo.com/v1/forecast?latitude=38.7223&longitude=-9.1393&current=temperature_2m,wind_speed_10m,weather_code"
+
 
 def fetch_weather_conditions() -> Dict:
-    """Fetch current NYC weather and return simulation multipliers."""
     now = time.time()
     if _weather_cache["data"] and (now - _weather_cache["timestamp"]) < WEATHER_CACHE_TTL:
         return _weather_cache["data"]
     
     try:
-        headers = {"User-Agent": "MTA-Stochastic-Engine/1.0"}
-        resp = requests.get(NWS_STATION_URL, headers=headers, timeout=5)
+        resp = requests.get(WEATHER_URL, timeout=5)
         if resp.status_code != 200:
             return _default_conditions()
         
-        props = resp.json().get("properties", {})
+        current = resp.json().get("current", {})
+        temp_c = current.get("temperature_2m")
+        wind_speed_kmh = current.get("wind_speed_10m", 0)
+        weather_code = current.get("weather_code", 0)
         
-        # Extract conditions
-        temp_c = props.get("temperature", {}).get("value")
-        wind_speed_kmh = props.get("windSpeed", {}).get("value", 0) or 0
-        description = (props.get("textDescription") or "").lower()
-        
-        # Determine multipliers
+        # WMO Weather codes: https://www.nodc.noaa.gov/archive/arc0021/0002199/1.1/data/0-data/HTML/WMO-CODE/WMO4677.HTM
         delay_multiplier = 1.0
         walk_multiplier = 1.0
+        description = "clear"
         
-        # Rain effects
-        if any(w in description for w in ["rain", "drizzle", "shower", "thunderstorm"]):
-            delay_multiplier *= 1.3  # 30% more delays (outdoor sections, slippery rails)
-            walk_multiplier *= 1.25  # 25% slower walking
-            if "heavy" in description or "thunderstorm" in description:
+        if weather_code in [61, 63, 65, 80, 81, 82]:  # Rain
+            description = "rain"
+            delay_multiplier *= 1.3
+            walk_multiplier *= 1.25
+            if weather_code in [65, 82]:  # Heavy rain
+                description = "heavy rain"
                 delay_multiplier *= 1.5
                 walk_multiplier *= 1.4
-        
-        # Snow/ice effects
-        if any(w in description for w in ["snow", "ice", "sleet", "freezing", "blizzard"]):
-            delay_multiplier *= 2.0  # Double delays
-            walk_multiplier *= 1.5  # 50% slower walking
-            if "heavy" in description or "blizzard" in description:
-                delay_multiplier *= 2.5
-                walk_multiplier *= 2.0
-        
-        # Extreme heat (signal equipment failures)
-        if temp_c is not None and temp_c > 35:
-            delay_multiplier *= 1.2  # Heat causes track/signal issues
-        
-        # Extreme cold
-        if temp_c is not None and temp_c < -10:
-            delay_multiplier *= 1.3  # Switch heater failures
-            walk_multiplier *= 1.3
-        
-        # High winds (affects elevated lines)
-        if wind_speed_kmh > 80:
-            delay_multiplier *= 1.5  # Service suspensions on bridges/elevated
-        
-        # Fog
-        if "fog" in description:
+        elif weather_code in [95, 96, 99]:  # Thunderstorm
+            description = "thunderstorm"
+            delay_multiplier *= 1.6
+            walk_multiplier *= 1.5
+        elif weather_code in [71, 73, 75, 77, 85, 86]:  # Snow (rare in Lisbon)
+            description = "snow"
+            delay_multiplier *= 2.0
+            walk_multiplier *= 1.5
+        elif weather_code in [51, 53, 55, 56, 57]:  # Drizzle
+            description = "drizzle"
             delay_multiplier *= 1.1
+            walk_multiplier *= 1.1
+        elif weather_code in [45, 48]:  # Fog
+            description = "fog"
+            delay_multiplier *= 1.1
+        elif weather_code in [0, 1]:  # Clear
+            description = "clear"
+        elif weather_code in [2, 3]:  # Partly cloudy / overcast
+            description = "cloudy"
+        
+        # Extreme heat (Lisbon summers can be brutal)
+        if temp_c is not None and temp_c > 38:
+            delay_multiplier *= 1.2
+        
+        # High winds
+        if wind_speed_kmh > 60:
+            delay_multiplier *= 1.3
         
         result = {
             "delay_multiplier": round(delay_multiplier, 2),
             "walk_multiplier": round(walk_multiplier, 2),
-            "description": description or "clear",
+            "description": description,
             "temp_c": temp_c,
             "is_outdoor_risk": delay_multiplier > 1.3,
         }

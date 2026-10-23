@@ -1,154 +1,44 @@
-from typing import List, Optional
+"""Lisbon transit alternative route logic and headway data."""
 import re
+from typing import List, Optional
 
+# Lisbon Metro lines and shared stations
 ALTERNATIVE_GROUPS = {
-    # IND Eighth Avenue Line (Blue)
-    "ACE_LOCAL": {
-        "lines": ["A", "C"],
-        "type": "express_local",
-        "shared_stops": [
-            "168 St",
-            "145 St",
-            "125 St",
-            "59 St-Columbus Circle",
-            "42 St-Port Authority",
-            "34 St-Penn Station",
-            "14 St",
-            "W 4 St-Washington Sq",
-            "Canal St",
-            "Fulton St",
-            "High St-Brooklyn Bridge",
-            "Jay St-MetroTech",
-            "Hoyt-Schermerhorn Sts",
-            "Nostrand Av",
-            "Utica Av",
-            "Broadway Junction",
-            "Euclid Av",
-        ],
+    "blue_yellow": {
+        "lines": ["AZUL", "AMARELA"],
+        "shared_stops": ["Marquês de Pombal"],
     },
-    # IND Sixth Avenue Line (Orange)
-    "BD_EXPRESS": {
-        "lines": ["B", "D"],
-        "type": "express_local",
-        "shared_stops": [
-            "145 St",
-            "125 St",
-            "59 St-Columbus Circle",
-            "7 Av",
-            "47-50 Sts-Rockefeller Ctr",
-            "42 St-Bryant Park",
-            "34 St-Herald Sq",
-            "W 4 St-Washington Sq",
-            "Broadway-Lafayette St",
-            "Grand St",
-            "DeKalb Av",
-            "Atlantic Av-Barclays Ctr",
-        ],
+    "green_red": {
+        "lines": ["VERDE", "VERMELHA"],
+        "shared_stops": ["Alameda"],
     },
-    # BMT Broadway Line (Yellow)
-    "NQR_LOCAL": {
-        "lines": ["N", "Q", "R"],
-        "type": "express_local",
-        "shared_stops": [
-            "Times Sq-42 St",
-            "34 St-Herald Sq",
-            "28 St",
-            "23 St",
-            "14 St-Union Sq",
-            "8 St-NYU",
-            "Prince St",
-            "Canal St",
-            "City Hall",
-            "Cortlandt St",
-            "Rector St",
-            "Whitehall St",
-        ],
+    "yellow_green": {
+        "lines": ["AMARELA", "VERDE"],
+        "shared_stops": ["Campo Grande"],
     },
-    # IRT Lexington Avenue Line (Green)
-    "45_EXPRESS": {
-        "lines": ["4", "5"],
-        "type": "express_local",
-        "shared_stops": [
-            "125 St",
-            "86 St",
-            "59 St",
-            "Grand Central-42 St",
-            "14 St-Union Sq",
-            "Brooklyn Bridge-City Hall",
-            "Fulton St",
-            "Wall St",
-            "Bowling Green",
-            "Borough Hall",
-            "Nevins St",
-            "Atlantic Av-Barclays Ctr",
-            "Franklin Av-Medgar Evers College",
-        ],
-    },
-    # IRT Broadway-Seventh Avenue Line (Red)
-    "23_LOCAL": {
-        "lines": ["2", "3"],
-        "type": "express_local",
-        "shared_stops": [
-            "96 St",
-            "72 St",
-            "Times Sq-42 St",
-            "34 St-Penn Station",
-            "14 St",
-            "Chambers St",
-            "Park Pl",
-            "Fulton St",
-            "Wall St",
-            "Clark St",
-            "Borough Hall",
-            "Hoyt St",
-            "Nevins St",
-            "Atlantic Av-Barclays Ctr",
-            "Bergen St",
-            "Grand Army Plaza",
-            "Eastern Pkwy-Brooklyn Museum",
-            "Franklin Av-Medgar Evers College",
-            "Nostrand Av",
-        ],
-    },
-    # IRT Lexington + Broadway (Green/Red)
-    "JZ_SHUTTLE": {
-        "lines": ["J", "Z"],
-        "type": "skip_stop",
-        "shared_stops": [
-            "Broad St",
-            "Fulton St",
-            "Chambers St",
-            "Canal St",
-            "Bowery",
-            "Delancey St-Essex St",
-            "Marcy Av",
-            "Hewes St",
-            "Broadway Junction",
-        ],
+    "blue_green": {
+        "lines": ["AZUL", "VERDE"],
+        "shared_stops": ["Baixa-Chiado"],
     },
 }
 
 # Average headways in minutes for [peak, midday, evening, overnight, weekend]
 HEADWAY_DATA = {
-    "A": {"peak": 5.0, "midday": 8.0, "evening": 10.0, "overnight": 20.0, "weekend": 12.0},
-    "C": {"peak": 6.0, "midday": 10.0, "evening": 12.0, "overnight": None, "weekend": 12.0},
-    "B": {"peak": 6.0, "midday": 10.0, "evening": 10.0, "overnight": None, "weekend": None},
-    "D": {"peak": 5.0, "midday": 8.0, "evening": 10.0, "overnight": 20.0, "weekend": 12.0},
-    "N": {"peak": 6.0, "midday": 10.0, "evening": 12.0, "overnight": 20.0, "weekend": 12.0},
-    "Q": {"peak": 5.0, "midday": 8.0, "evening": 10.0, "overnight": 20.0, "weekend": 10.0},
-    "R": {"peak": 8.0, "midday": 10.0, "evening": 15.0, "overnight": None, "weekend": 15.0},
-    "4": {"peak": 4.0, "midday": 6.0, "evening": 8.0, "overnight": 20.0, "weekend": 10.0},
-    "5": {"peak": 5.0, "midday": 8.0, "evening": 12.0, "overnight": None, "weekend": 12.0},
-    "2": {"peak": 5.0, "midday": 8.0, "evening": 10.0, "overnight": 20.0, "weekend": 12.0},
-    "3": {"peak": 6.0, "midday": 8.0, "evening": 10.0, "overnight": None, "weekend": 12.0},
-    "J": {"peak": 5.0, "midday": 8.0, "evening": 10.0, "overnight": 20.0, "weekend": 12.0},
-    "Z": {"peak": 5.0, "midday": None, "evening": None, "overnight": None, "weekend": None},
-    "DEFAULT": {"peak": 6.0, "midday": 10.0, "evening": 12.0, "overnight": 20.0, "weekend": 12.0},
+    "AZUL": {"peak": 4.0, "midday": 6.0, "evening": 8.0, "overnight": None, "weekend": 8.0},
+    "AMARELA": {"peak": 4.0, "midday": 6.0, "evening": 8.0, "overnight": None, "weekend": 8.0},
+    "VERDE": {"peak": 4.0, "midday": 6.0, "evening": 8.0, "overnight": None, "weekend": 8.0},
+    "VERMELHA": {"peak": 5.0, "midday": 7.0, "evening": 9.0, "overnight": None, "weekend": 9.0},
+    "CP_SINTRA": {"peak": 10.0, "midday": 20.0, "evening": 20.0, "overnight": None, "weekend": 20.0},
+    "CP_CASCAIS": {"peak": 12.0, "midday": 20.0, "evening": 20.0, "overnight": None, "weekend": 20.0},
+    "CP_AZAMBUJA": {"peak": 15.0, "midday": 30.0, "evening": 30.0, "overnight": None, "weekend": 30.0},
+    "FERTAGUS": {"peak": 10.0, "midday": 20.0, "evening": 20.0, "overnight": None, "weekend": 20.0},
+    "FERRY": {"peak": 15.0, "midday": 20.0, "evening": 30.0, "overnight": None, "weekend": 20.0},
+    "DEFAULT": {"peak": 10.0, "midday": 15.0, "evening": 20.0, "overnight": 30.0, "weekend": 15.0},
 }
 
 
 def clean_stop_name(stop_name: str) -> str:
-    s = stop_name.replace("Station", "").strip()
+    s = stop_name.replace("Station", "").replace("Estação", "").strip()
     s = s.replace(" - ", "-").replace(" / ", "/").replace(" /", "/").replace("/ ", "/")
     return s
 
@@ -168,7 +58,7 @@ def find_alternatives(
     if not line_id or not departure_stop or not arrival_stop:
         return [line_id] if line_id else []
 
-    clean_line = line_id.strip()[0]
+    clean_line = line_id.strip().upper()
     alternatives = [clean_line]
 
     for group_name, group_data in ALTERNATIVE_GROUPS.items():
@@ -180,10 +70,11 @@ def find_alternatives(
                     if alt_line not in alternatives:
                         alternatives.append(alt_line)
             break
+
     return alternatives
 
 
 def get_headway(line_id: str, time_of_day: str = "peak") -> Optional[float]:
-    clean_line = line_id.strip()[0]
+    clean_line = line_id.strip().upper()
     data = HEADWAY_DATA.get(clean_line, HEADWAY_DATA["DEFAULT"])
     return data.get(time_of_day)

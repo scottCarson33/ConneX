@@ -30,49 +30,43 @@ logger = logging.getLogger(__name__)
 
 # --- SECURE CONFIGURATION TOKENS ---
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "AIzaSyDyiFzvUe3K7rFAXGi90QX0MQlDibmVThc")
-MTA_API_KEY = os.getenv("MTA_API_KEY", "40635c2e-4f8c-4565-abf7-0e3dfdefb924")
+
+# Lisbon transit doesn't require API keys for GTFS feeds
 
 ROUTES_ENDPOINT = "https://routes.googleapis.com/directions/v2:computeRoutes"
-BUS_TIME_FEED_URL = (
-    f"https://bustime-beta.mta.info/api/gtfs-rt/tripUpdates?key={MTA_API_KEY}"
-)
-MTA_HEADERS = {"x-api-key": MTA_API_KEY}
 
-MTA_FEED_URLS = {
-    "ACE": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-ace",
-    "NQRW": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-nqrw",
-    "NUMBERS": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs",
-    "BDFM": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-bdfm",
-    "JZ": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-jz",
-    "L": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-l",
-    "G": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-g",
-    "SIR": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-si",
-    "MNR": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/mnr%2Fgtfs-mnr",
-    "LIRR": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/lirr%2Fgtfs-lirr",
-    "ALERTS": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/camsys%2Fsubway-alerts",
-}
-
-NJ_RSS_FEEDS = {
-    "RAIL": "https://www.njtransit.com/rss/RailAdvisories_feed.xml",
-    "BUS": "https://www.njtransit.com/rss/BusAdvisories_feed.xml",
-    "LIGHT_RAIL": "https://www.njtransit.com/rss/LightRailAdvisories_feed.xml"
+# Lisbon Metro lines: Azul (Blue), Amarela (Yellow), Verde (Green), Vermelha (Red)
+# Carris: Buses and trams
+# CP: Comboios de Portugal suburban trains
+# Fertagus: Cross-Tagus train
+# Transtejo/Soflusa: Ferries
+LISBON_FEED_URLS = {
+    "METRO": None,  # Metro de Lisboa GTFS-RT (not publicly available yet)
+    "CARRIS": None,  # Carris Metropolitana GTFS-RT
+    "CP": None,  # CP suburban trains
+    "FERTAGUS": None,  # Fertagus cross-Tagus
+    "FERRY": None,  # Transtejo/Soflusa ferries
 }
 
 # --- SIMULATION CONSTANTS ---
-BASE_FARE = 3.00
-EXPRESS_BUS_FARE = 7.00
-NYC_FERRY_FARE = 4.50
-STATEN_ISLAND_FERRY_FARE = 0.00
-CITIBIKE_UNLOCK = 4.79
-CITIBIKE_PER_MIN = 0.30
+BASE_FARE = 1.65  # Lisbon metro/bus single ticket (Viva Viagem)
+ZAPPING_FARE = 1.47  # Zapping (rechargeable) fare
+CP_SUBURBAN_FARE = 2.30  # CP suburban train base
+FERRY_FARE = 2.80  # Transtejo ferry
+GIRA_UNLOCK = 0.00  # Gira bike sharing (free first 45 min with pass)
+GIRA_PER_MIN = 0.15  # After free period
 
-CITIBIKE_WALK_TO_STATION = 4.0
-CITIBIKE_UNLOCK_DOCK_TIME = 2.0
-CITIBIKE_WALK_TO_DESTINATION = 4.0
+GIRA_WALK_TO_STATION = 4.0
+GIRA_UNLOCK_DOCK_TIME = 2.0
+GIRA_WALK_TO_DESTINATION = 4.0
+# Gira / Citibike compatibility aliases
+CITIBIKE_WALK_TO_STATION = GIRA_WALK_TO_STATION
+CITIBIKE_UNLOCK_DOCK_TIME = GIRA_UNLOCK_DOCK_TIME
+CITIBIKE_WALK_TO_DESTINATION = GIRA_WALK_TO_DESTINATION
 
 DEFAULT_SIM_TRIALS = int(os.getenv("SIM_TRIALS", "2000"))
 
-app = FastAPI(title="MTA Stochastic Engine API")
+app = FastAPI(title="Lisbon Transit Stochastic Engine API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -88,68 +82,60 @@ class SimulationRequest(BaseModel):
     destination: str
     target_time: Optional[str] = None  # ISO8601 String
     time_mode: str = "depart_at"  # "depart_at" or "arrive_by"
+    suspended_lines: List[str] = Field(default_factory=list)  # "What If" mode
 
 
 def clean_line_id(line_id: str) -> str:
     token = str(line_id or "").upper().strip().split()[0]
-    if token.startswith(("6", "7")):
-        return token[0]
-    return token
+    # Map Lisbon metro color names
+    metro_map = {
+        "BLUE": "AZUL", "YELLOW": "AMARELA", 
+        "GREEN": "VERDE", "RED": "VERMELHA",
+    }
+    return metro_map.get(token, token)
 
 
 def estimate_commuter_rail_fare(duration_mins: float) -> float:
-    if duration_mins <= 30:
-        return 7.00
-    elif duration_mins <= 60:
-        return 14.00
-    elif duration_mins <= 90:
-        return 18.00
+    """Estimate CP suburban train fare based on zones."""
+    if duration_mins <= 20:
+        return 2.30  # 1-2 zones
+    elif duration_mins <= 45:
+        return 3.50  # 3-4 zones
     else:
-        return 23.00
+        return 5.00  # 5+ zones
 
 
 def calculate_itinerary_fare(itinerary: List[Dict], api_fare: float = 0.0) -> float:
     if api_fare > 0:
         return api_fare
     total_fare = 0.0
-    has_subway_or_local = False
+    has_metro_or_bus = False
 
     for step in itinerary:
-        if step["mode"] == "CITIBIKE":
+        if step["mode"] == "CITIBIKE":  # Gira bikes
             dur = step.get("baseline_duration", 0.0)
-            bike_cost = CITIBIKE_UNLOCK
-            if dur > 30:
-                bike_cost += (dur - 30) * CITIBIKE_PER_MIN
+            bike_cost = GIRA_UNLOCK
+            if dur > 45:
+                bike_cost += (dur - 45) * GIRA_PER_MIN
             total_fare += bike_cost
             continue
 
         if step["mode"] != "TRANSIT":
             continue
 
-        line_id = str(step.get("line_id", "")).upper()
-        line_name = str(step.get("line_name", "")).upper()
-        is_bus = step.get("is_bus", False)
         is_ferry = step.get("is_ferry", False)
         is_rail = step.get("is_commuter_rail", False)
         duration = step.get("baseline_duration", 0.0)
 
         if is_rail:
-            total_fare += estimate_commuter_rail_fare(duration)
+            total_fare += CP_SUBURBAN_FARE
         elif is_ferry:
-            if "STATEN ISLAND" in line_name:
-                total_fare += STATEN_ISLAND_FERRY_FARE
-            elif "NYC FERRY" in line_name or "NEW YORK CITY FERRY" in line_name:
-                total_fare += NYC_FERRY_FARE
-            else:
-                total_fare += 10.00
-        elif is_bus and any(
-            line_id.startswith(prefix) for prefix in ["QM", "SIM", "X", "BM", "BXM"]
-        ):
-            total_fare += EXPRESS_BUS_FARE
+            total_fare += FERRY_FARE
         else:
-            if not has_subway_or_local:
-                total_fare += BASE_FARE
-                has_subway_or_local = True
+            if not has_metro_or_bus:
+                total_fare += ZAPPING_FARE  # First metro/bus with Zapping
+                has_metro_or_bus = True
+            # Additional transfers within 60 min are free with Zapping
 
     return round(total_fare, 2)
 
@@ -158,121 +144,29 @@ def get_transit_feed_type(
     route_id: str, is_bus: bool, line_name: str = ""
 ) -> Optional[str]:
     if is_bus:
-        return "BUS"
+        return "CARRIS"
     name_upper = str(line_name).upper()
-    if "LIRR" in name_upper:
-        return "LIRR"
-    if (
-        "MNR" in name_upper
-        or "HUDSON" in name_upper
-        or "HARLEM" in name_upper
-        or "NEW HAVEN" in name_upper
-    ):
-        return "MNR"
+    if any(kw in name_upper for kw in ["CP", "COMBOIOS", "SINTRA", "CASCAIS", "AZAMBUJA"]):
+        return "CP"
+    if "FERTAGUS" in name_upper:
+        return "FERTAGUS"
+    if any(kw in name_upper for kw in ["FERRY", "TRANSTEJO", "SOFLUSA"]):
+        return "FERRY"
+    # Metro lines
+    route = str(route_id).upper().strip()
+    if route in ["AZUL", "BLUE", "AMARELA", "YELLOW", "VERDE", "GREEN", "VERMELHA", "RED"]:
+        return "METRO"
+    return "METRO"  # Default to metro for Lisbon
 
-    route_tokens = str(route_id).upper().strip().split()
-    route = route_tokens[0] if route_tokens else ""
-    if route in ["A", "C", "E"]:
-        return "ACE"
-    if route in ["N", "Q", "R", "W"]:
-        return "NQRW"
-    if route in ["B", "D", "F", "M"]:
-        return "BDFM"
-    if route in ["J", "Z"]:
-        return "JZ"
-    if route in ["L"]:
-        return "L"
-    if route in ["G"]:
-        return "G"
-    if route in ["1", "2", "3", "4", "5", "6", "7", "7X"]:
-        return "NUMBERS"
-    if route in ["S", "GS"]:
-        return "NUMBERS"
-    if route in ["SIR"]:
-        return "SIR"
-    if "NJ" in str(line_name).upper() or "NJ TRANSIT" in str(line_name).upper() or "PATH" in str(line_name).upper():
-        return "NJT"
-    return None
-
-
-def check_nj_alerts(line_id: str, is_bus: bool) -> bool:
-    target = str(line_id).lower()
-    feed_url = NJ_RSS_FEEDS["BUS"] if is_bus else NJ_RSS_FEEDS["RAIL"]
-    try:
-        response = requests.get(feed_url, timeout=5)
-        if response.status_code == 200:
-            root = ET.fromstring(response.content)
-            for item in root.findall(".//item"):
-                title = (item.find("title").text or "").lower()
-                desc = (item.find("description").text or "").lower()
-                if target in title or target in desc:
-                    keywords = ["delay", "suspended", "cancelled", "cancel", "disruption"]
-                    if any(w in title or w in desc for w in keywords):
-                        return True
-    except:
-        pass
-    return False
 
 def check_for_alerts(route_character: str, feed_key: Optional[str] = None, is_bus: bool = False) -> bool:
-    if feed_key == "NJT":
-        return check_nj_alerts(route_character, is_bus)
-
-    feed = gtfs_realtime_pb2.FeedMessage()
-    try:
-        response = requests.get(MTA_FEED_URLS["ALERTS"], headers=MTA_HEADERS, timeout=5)
-        if response.status_code != 200:
-            return False
-        feed.ParseFromString(response.content)
-        target = str(route_character).upper().strip()
-        keywords = [
-            "delay",
-            "slow",
-            "suspended",
-            "mechanical",
-            "ongoing",
-            "service change",
-        ]
-
-        for entity in feed.entity:
-            if entity.HasField("alert"):
-                for informed in entity.alert.informed_entity:
-                    if str(informed.route_id).upper().strip() == target:
-                        text = str(entity.alert.header_text).lower()
-                        if any(w in text for w in keywords):
-                            return True
-    except:
-        pass
+    """Check for transit alerts. Currently returns False as Lisbon GTFS-RT alerts are not yet integrated."""
     return False
 
 
 def fetch_live_delay(route_id: str, feed_key: Optional[str]) -> float:
-    if not feed_key:
-        return 0.0
-    url = BUS_TIME_FEED_URL if feed_key == "BUS" else MTA_FEED_URLS.get(feed_key)
-    if not url:
-        return 0.0
-
-    feed = gtfs_realtime_pb2.FeedMessage()
-    try:
-        response = requests.get(url, headers=MTA_HEADERS, timeout=5)
-        if response.status_code != 200:
-            return 0.5
-        feed.ParseFromString(response.content)
-
-        delays = []
-        clean_target = str(route_id).upper().strip().split()[0]
-
-        for entity in feed.entity:
-            if entity.HasField("trip_update"):
-                f_route = str(entity.trip_update.trip.route_id).upper().strip()
-                if clean_target in f_route or f_route in clean_target:
-                    if entity.trip_update.stop_time_update:
-                        arrival = entity.trip_update.stop_time_update[0].arrival
-                        if arrival and arrival.HasField("delay"):
-                            delays.append(arrival.delay)
-        return (sum(delays) / len(delays)) / 60.0 if delays else 0.0
-    except:
-        return 0.5
+    """Fetch live delay. Currently returns base estimate as Lisbon GTFS-RT is not yet integrated."""
+    return 0.5  # Default 30-second base delay estimate
 
 
 def parse_v2_duration(val: Any) -> float:
@@ -526,12 +420,13 @@ def fetch_google_itineraries(
                 is_commuter_rail = v_type == "COMMUTER_TRAIN" or any(
                     rn in line_name.upper()
                     for rn in [
-                        "LIRR",
-                        "LONG ISLAND",
-                        "METRO-NORTH",
-                        "HUDSON",
-                        "HARLEM",
-                        "NEW HAVEN",
+                        "CP",
+                        "COMBOIOS",
+                        "SINTRA",
+                        "CASCAIS",
+                        "AZAMBUJA",
+                        "FERTAGUS",
+                        "SADO",
                     ]
                 )
 
@@ -654,8 +549,8 @@ def next_cached_arrival(arrivals: List[float], current_unix: float) -> Optional[
     return arrivals[idx] if idx < len(arrivals) else None
 
 
-def get_nyc_hour(dt: datetime) -> int:
-    return dt.astimezone(ZoneInfo("America/New_York")).hour
+def get_lisbon_hour(dt: datetime) -> int:
+    return dt.astimezone(ZoneInfo("Europe/Lisbon")).hour
 
 
 def run_competitive_simulation(
@@ -712,18 +607,15 @@ def run_competitive_simulation(
                 # Correlated delays (System Shocks)
                 hub_delay = 0.0
                 hubs = {
-                    "union sq": ["L", "N", "Q", "R", "W", "4", "5", "6"],
-                    "times sq": ["1", "2", "3", "7", "N", "Q", "R", "W", "S"],
-                    "atlantic av": ["2", "3", "4", "5", "B", "D", "N", "Q", "R"],
-                    "fulton": ["2", "3", "4", "5", "A", "C", "J", "Z"],
-                    "14 st": ["1", "2", "3", "F", "M", "L"],
-                    "herald sq": ["B", "D", "F", "M", "N", "Q", "R", "W"],
-                    "jay st": ["A", "C", "F", "R"],
-                    "broadway jct": ["A", "C", "J", "Z", "L"],
-                    "dekalb av": ["B", "D", "N", "Q", "R"],
-                    "chambers st": ["1", "2", "3", "A", "C", "J", "Z"],
-                    "59 st columbus": ["1", "2", "A", "B", "C", "D"],
-                    "lexington 59": ["4", "5", "6", "N", "R", "W"],
+                    "marquês de pombal": ["AZUL", "AMARELA"],
+                    "alameda": ["VERDE", "VERMELHA"],
+                    "campo grande": ["AMARELA", "VERDE"],
+                    "baixa-chiado": ["AZUL", "VERDE"],
+                    "cais do sodré": ["VERDE"],  # Metro + Ferry + Train
+                    "entrecampos": ["AMARELA"],  # Metro + CP
+                    "roma-areeiro": ["VERDE"],  # Metro + CP
+                    "oriente": ["VERMELHA"],  # Metro + CP + Bus hub
+                    "sete rios": ["AZUL"],  # Metro + CP + Bus terminal
                 }
                 
                 for hub, lines in hubs.items():
@@ -735,12 +627,9 @@ def run_competitive_simulation(
 
                 # Shared track correlation (express/local on same tracks)
                 shared_tracks = {
-                    "4_5_express": ["4", "5"],
-                    "2_3_express": ["2", "3"],
-                    "N_W_local_queens": ["N", "W"],
-                    "A_C_local": ["A", "C"],
-                    "B_D_express": ["B", "D"],
-                    "E_F_queens": ["E", "F"],
+                    "sintra_line": ["CP_SINTRA"],
+                    "cascais_line": ["CP_CASCAIS"],
+                    "metro_blue_green": ["AZUL", "VERDE"],  # Share Baixa-Chiado
                 }
                 
                 track_delay = 0.0
@@ -829,15 +718,15 @@ def run_competitive_simulation(
                             gtfs_arrivals, current_unix
                         )
 
-                    nyc_hour = get_nyc_hour(virtual_clock)
+                    lisbon_hour = get_lisbon_hour(virtual_clock)
                     is_weekend = virtual_clock.weekday() >= 5
                     if is_weekend:
                         tod = "weekend"
-                    elif 6 <= nyc_hour < 10 or 15 <= nyc_hour < 20:
+                    elif 6 <= lisbon_hour < 10 or 15 <= lisbon_hour < 20:
                         tod = "peak"
-                    elif 10 <= nyc_hour < 15:
+                    elif 10 <= lisbon_hour < 15:
                         tod = "midday"
-                    elif 20 <= nyc_hour < 24:
+                    elif 20 <= lisbon_hour < 24:
                         tod = "evening"
                     else:
                         tod = "overnight"
@@ -1042,6 +931,11 @@ def run_simulation(req: SimulationRequest):
                         alert = check_for_alerts(clean, f_key, s["is_bus"])
                         live_telemetry[clean] = {"delay": delay, "has_alert": alert}
 
+        # Apply "What If" suspensions
+        for line in req.suspended_lines:
+            clean = clean_line_id(line)
+            live_telemetry[clean] = {"delay": 9999.0, "has_alert": True}
+
         live_arrival_cache = build_live_arrival_cache(itineraries)
         sim_results = run_competitive_simulation(
             itineraries,
@@ -1084,6 +978,30 @@ def run_simulation(req: SimulationRequest):
             route_data["metrics"] = m
             route_data["title"] = route_signature(route["itinerary"])
 
+            # Carbon footprint comparison
+            total_transit_mins = sum(
+                s["baseline_duration"] for s in route["itinerary"] if s["mode"] == "TRANSIT"
+            )
+            total_walk_mins = sum(
+                s["baseline_duration"] for s in route["itinerary"] if s["mode"] == "WALK"
+            )
+            total_bike_mins = sum(
+                s["baseline_duration"] for s in route["itinerary"] if s["mode"] == "CITIBIKE"
+            )
+            # Rough distance estimates (mph * hours)
+            transit_miles = (total_transit_mins / 60) * 17.4  # avg subway speed 17.4 mph
+            walk_miles = (total_walk_mins / 60) * 3.1
+            bike_miles = (total_bike_mins / 60) * 9.0
+            total_miles = transit_miles + walk_miles + bike_miles
+            
+            # CO2 per mile: car=404g, transit=96g, walk/bike=0g
+            car_co2_g = total_miles * 404
+            transit_co2_g = transit_miles * 96
+            co2_saved_g = car_co2_g - transit_co2_g
+            
+            route_data["co2_saved_kg"] = round(co2_saved_g / 1000, 2)
+            route_data["total_miles"] = round(total_miles, 1)
+
             # Remove the backend sorting key from payload to avoid JSON serialization errors with datetimes
             if "req_departure_dt" in route_data["metrics"]:
                 route_data["metrics"].pop("req_departure_dt")
@@ -1112,6 +1030,12 @@ def run_simulation(req: SimulationRequest):
             "time_mode": req.time_mode,
             "target_time_str": local_target_str,
             "data": payload,
+            "navegante_pass": {
+                "monthly_municipal": 30.00,  # Navegante Municipal (Lisbon only)
+                "monthly_metropolitan": 40.00,  # Navegante Metropolitano (greater Lisbon)
+                "single_ride": 1.65,
+                "zapping_ride": 1.47,
+            },
         }
 
     except Exception as e:
