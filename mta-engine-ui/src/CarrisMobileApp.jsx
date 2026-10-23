@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 
 // Official Carris & Lisbon Line Colors
 const LINE_COLORS = {
@@ -158,110 +158,6 @@ function normalizeBackendRoute(r, index) {
   };
 }
 
-// Default curated routes matching both the CARRISway prototype & screenshots
-const DEFAULT_SAMPLE_ROUTES = [
-  {
-    id: "sample-1",
-    title: "731 → 728",
-    linhas: [
-      { n: "731", c: { bg: "#E2231A", fg: "#FFFFFF" }, isBus: true },
-      { n: "728", c: { bg: "#003F8F", fg: "#FFFFFF" }, isBus: true },
-    ],
-    compressedSteps: [
-      { mode: "WALK", baseline_duration: 5, line_display: "Walk to Hosp. Sta. Maria - Av. Prof. Gama Pinto" },
-      { mode: "TRANSIT", baseline_duration: 18, line_id: "731", line_display: "731 Bus", departure_stop: "Hosp. Sta. Maria - Av. Prof. Gama Pinto", expected_board_time: "12:20", expected_wait_mins: 4 },
-      { mode: "WALK", baseline_duration: 6, line_display: "Walk to Cais do Sodré" },
-      { mode: "TRANSIT", baseline_duration: 15, line_id: "728", line_display: "728 Bus", departure_stop: "Cais do Sodré", expected_board_time: "12:44", expected_wait_mins: 5 },
-      { mode: "ARRIVE", baseline_duration: 0, line_display: "Destination Reached", expected_board_time: "13:03" },
-    ],
-    transbordos: 1,
-    walkMins: 11,
-    dur: 44,
-    lo: 40,
-    hi: 49,
-    score: 94,
-    cost: 1.47,
-    sai: "12:20",
-    chega: "13:03",
-    firstStop: "Hosp. Sta. Maria - Av. Prof. Gama Pinto",
-    firstWait: 12,
-    tags: ["Mais fiável"],
-  },
-  {
-    id: "sample-2",
-    title: "735 Direto",
-    linhas: [{ n: "735", c: { bg: "#E2231A", fg: "#FFFFFF" }, isBus: true }],
-    compressedSteps: [
-      { mode: "WALK", baseline_duration: 4, line_display: "Walk to Campo Grande" },
-      { mode: "TRANSIT", baseline_duration: 34, line_id: "735", line_display: "735 Bus", departure_stop: "Campo Grande", expected_board_time: "12:18", expected_wait_mins: 4 },
-      { mode: "WALK", baseline_duration: 4, line_display: "Walk to Destino" },
-      { mode: "ARRIVE", baseline_duration: 0, line_display: "Destination Reached", expected_board_time: "13:00" },
-    ],
-    transbordos: 0,
-    walkMins: 8,
-    dur: 42,
-    lo: 39,
-    hi: 47,
-    score: 90,
-    cost: 1.47,
-    sai: "12:18",
-    chega: "13:00",
-    firstStop: "Campo Grande - Av. Brasil",
-    firstWait: 6,
-    tags: ["Direto"],
-  },
-  {
-    id: "sample-3",
-    title: "701 → 760",
-    linhas: [
-      { n: "701", c: { bg: "#00767A", fg: "#FFFFFF" }, isBus: true },
-      { n: "760", c: { bg: "#6A2C91", fg: "#FFFFFF" }, isBus: true },
-    ],
-    compressedSteps: [
-      { mode: "WALK", baseline_duration: 4, line_display: "Walk to Campo Grande" },
-      { mode: "TRANSIT", baseline_duration: 22, line_id: "701", line_display: "701 Bus", departure_stop: "Campo Grande", expected_board_time: "12:16", expected_wait_mins: 5 },
-      { mode: "WALK", baseline_duration: 3, line_display: "Walk to Transfer" },
-      { mode: "TRANSIT", baseline_duration: 18, line_id: "760", line_display: "760 Bus", departure_stop: "Alameda", expected_board_time: "12:41", expected_wait_mins: 5 },
-      { mode: "ARRIVE", baseline_duration: 0, line_display: "Destination Reached", expected_board_time: "13:03" },
-    ],
-    transbordos: 1,
-    walkMins: 7,
-    dur: 47,
-    lo: 41,
-    hi: 55,
-    score: 76,
-    cost: 1.47,
-    sai: "12:16",
-    chega: "13:03",
-    firstStop: "Campo Grande",
-    firstWait: 8,
-    tags: [],
-  },
-  {
-    id: "sample-4",
-    title: "750 Direto",
-    linhas: [{ n: "750", c: { bg: "#6B7280", fg: "#FFFFFF" }, isBus: true }],
-    compressedSteps: [
-      { mode: "WALK", baseline_duration: 15, line_display: "Walk to Campo Grande - Av. Brasil" },
-      { mode: "TRANSIT", baseline_duration: 17, line_id: "750", line_display: "750 Bus", departure_stop: "Campo Grande - Av. Brasil", expected_board_time: "12:31", expected_wait_mins: 19 },
-      { mode: "WALK", baseline_duration: 7, line_display: "Walk to Ikonik Lisboa" },
-      { mode: "ARRIVE", baseline_duration: 0, line_display: "Destination Reached", expected_board_time: "12:54" },
-    ],
-    transbordos: 0,
-    walkMins: 22,
-    dur: 39,
-    lo: 35,
-    hi: 58,
-    score: 54,
-    cost: 1.47,
-    sai: "12:16",
-    chega: "12:54",
-    firstStop: "Campo Grande - Av. Brasil",
-    firstWait: 19,
-    tags: ["Mais rápida"],
-  },
-];
-
 const FILTER_OPTIONS = [
   { id: "fiavel", label: "Rota mais fiável", sub: "Prioriza cumprimento de horário (≥ 7/10)" },
   { id: "melhor", label: "Melhor rota", sub: "Mostra sempre a mais fiável primeiro" },
@@ -278,29 +174,32 @@ const FILTER_OPTIONS = [
 
 export default function CarrisMobileApp({ onSwitchToClassic }) {
   const [screen, setScreen] = useState("resultados"); // 'menu' | 'planear' | 'resultados' | 'detalhe'
-  const [origin, setOrigin] = useState("IGOT-ULisboa - Instituto de Geografia");
-  const [destination, setDestination] = useState("Ikonik Lisboa");
+  const [origin, setOrigin] = useState("Praça do Comércio");
+  const [destination, setDestination] = useState("Belém, Lisboa");
   const [allowBike, setAllowBike] = useState(false);
   const [showPercentages, setShowPercentages] = useState(true);
   const [filterBy, setFilterBy] = useState("fiavel");
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [routes, setRoutes] = useState(DEFAULT_SAMPLE_ROUTES);
-  const [selectedRouteId, setSelectedRouteId] = useState(DEFAULT_SAMPLE_ROUTES[0].id);
+  const [errorMsg, setErrorMsg] = useState("");
+  const [routes, setRoutes] = useState([]);
+  const [selectedRouteId, setSelectedRouteId] = useState(null);
   const [alertEnabled, setAlertEnabled] = useState(false);
 
   const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
   const recentSearches = [
-    { a: "IGOT-ULisboa - Instituto de Geografia", b: "Ikonik Lisboa" },
-    { a: "Campo Grande", b: "Cais do Sodré" },
     { a: "Praça do Comércio", b: "Belém, Lisboa" },
+    { a: "Campo Grande", b: "Cais do Sodré" },
     { a: "Oriente", b: "Marquês de Pombal" },
+    { a: "IGOT-ULisboa - Instituto de Geografia", b: "Ikonik Lisboa" },
   ];
 
   // Fetch live simulation from backend API
   const runLiveSimulation = async (orig = origin, dest = destination, bike = allowBike) => {
+    if (!orig.trim() || !dest.trim()) return;
     setLoading(true);
+    setErrorMsg("");
     try {
       const res = await fetch(`${API_BASE_URL}/api/simulate`, {
         method: "POST",
@@ -312,33 +211,41 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
           allow_bike: bike,
         }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.status === "success" && Array.isArray(data.data) && data.data.length > 0) {
-          const normalized = data.data.map((r, i) => normalizeBackendRoute(r, i));
-          // Ensure most reliable route is bumped slightly higher if needed and sorted first
-          normalized.sort((a, b) => b.score - a.score || a.dur - b.dur);
-          if (normalized.length > 0 && normalized[0].score < 88) {
-            normalized[0].score = Math.min(95, Math.max(88, normalized[0].score + 5));
-          }
-          const maxScore = Math.max(...normalized.map((n) => n.score));
-          const minDur = Math.min(...normalized.map((n) => n.dur));
-          normalized.forEach((n) => {
-            const tags = [];
-            if (n.score === maxScore) tags.push("Mais fiável");
-            if (n.dur === minDur) tags.push("Mais rápida");
-            n.tags = tags;
-          });
-          setRoutes(normalized);
-          setSelectedRouteId(normalized[0].id);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || "Não foi possível encontrar rotas para estes locais.");
+      }
+      const data = await res.json();
+      if (data.status === "success" && Array.isArray(data.data) && data.data.length > 0) {
+        const normalized = data.data.map((r, i) => normalizeBackendRoute(r, i));
+        // Ensure most reliable route is bumped slightly higher if needed and sorted first
+        normalized.sort((a, b) => b.score - a.score || a.dur - b.dur);
+        if (normalized.length > 0 && normalized[0].score < 88) {
+          normalized[0].score = Math.min(95, Math.max(88, normalized[0].score + 5));
         }
+        const maxScore = Math.max(...normalized.map((n) => n.score));
+        const minDur = Math.min(...normalized.map((n) => n.dur));
+        normalized.forEach((n) => {
+          const tags = [];
+          if (n.score === maxScore) tags.push("Mais fiável");
+          if (n.dur === minDur) tags.push("Mais rápida");
+          n.tags = tags;
+        });
+        setRoutes(normalized);
+        setSelectedRouteId(normalized[0].id);
+      } else {
+        throw new Error("Nenhuma rota encontrada entre estes locais.");
       }
     } catch (e) {
-      // Fallback to curated sample routes if offline
+      setErrorMsg(e.message || "Erro ao calcular rota.");
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    runLiveSimulation("Praça do Comércio", "Belém, Lisboa", false);
+  }, []);
 
   // Sort routes: always keep the most reliable route first, then sort remaining by active filter
   const sortedRoutes = useMemo(() => {
@@ -381,8 +288,14 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
   };
 
   // Calculate scale for range bars
-  const minScale = useMemo(() => Math.max(10, Math.min(...routes.map((r) => r.lo)) - 5), [routes]);
-  const maxScale = useMemo(() => Math.max(...routes.map((r) => r.hi)) + 5, [routes]);
+  const minScale = useMemo(
+    () => (routes.length > 0 ? Math.max(5, Math.min(...routes.map((r) => r.lo)) - 5) : 10),
+    [routes]
+  );
+  const maxScale = useMemo(
+    () => (routes.length > 0 ? Math.max(...routes.map((r) => r.hi)) + 5 : 60),
+    [routes]
+  );
   const scaleSpan = Math.max(20, maxScale - minScale);
   const pctPos = (val) => `${Math.min(96, Math.max(4, ((val - minScale) / scaleSpan) * 100))}%`;
 
@@ -1273,7 +1186,11 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
               </div>
 
               {/* Floating Origin/Destination Card at Top of Map */}
-              <div
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  runLiveSimulation(origin, destination, allowBike);
+                }}
                 style={{
                   position: "absolute",
                   top: "12px",
@@ -1282,10 +1199,10 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                   background: "#FFFFFF",
                   borderRadius: "16px",
                   boxShadow: "0 4px 14px rgba(0,0,0,0.16)",
-                  padding: "8px 12px",
+                  padding: "8px 10px",
                   display: "flex",
                   alignItems: "center",
-                  gap: "8px",
+                  gap: "6px",
                 }}
               >
                 <button
@@ -1305,16 +1222,13 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                   </svg>
                 </button>
 
-                <div
-                  onClick={() => setScreen("planear")}
-                  style={{ flex: 1, minWidth: 0, cursor: "pointer" }}
-                >
+                <div style={{ flex: 1, minWidth: 0 }}>
                   <div
                     style={{
                       display: "flex",
                       alignItems: "center",
                       gap: "8px",
-                      paddingBottom: "5px",
+                      paddingBottom: "4px",
                       borderBottom: "1px solid #E6E6E3",
                     }}
                   >
@@ -1328,24 +1242,27 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                         flexShrink: 0,
                       }}
                     />
-                    <span
+                    <input
+                      type="text"
+                      value={origin}
+                      onChange={(e) => setOrigin(e.target.value)}
+                      placeholder="Origem (ex: Praça do Comércio)"
                       style={{
+                        border: "none",
+                        outline: "none",
+                        background: "transparent",
                         fontSize: "13px",
                         color: "#1D1D1B",
-                        whiteSpace: "nowrap",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
+                        width: "100%",
                       }}
-                    >
-                      {origin}
-                    </span>
+                    />
                   </div>
                   <div
                     style={{
                       display: "flex",
                       alignItems: "center",
                       gap: "8px",
-                      paddingTop: "5px",
+                      paddingTop: "4px",
                     }}
                   >
                     <span
@@ -1358,17 +1275,20 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                         flexShrink: 0,
                       }}
                     />
-                    <span
+                    <input
+                      type="text"
+                      value={destination}
+                      onChange={(e) => setDestination(e.target.value)}
+                      placeholder="Destino (ex: Belém, Lisboa)"
                       style={{
+                        border: "none",
+                        outline: "none",
+                        background: "transparent",
                         fontSize: "13px",
                         color: "#1D1D1B",
-                        whiteSpace: "nowrap",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
+                        width: "100%",
                       }}
-                    >
-                      {destination}
-                    </span>
+                    />
                   </div>
                 </div>
 
@@ -1382,8 +1302,8 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                   }}
                   aria-label="Inverter origem e destino"
                   style={{
-                    width: "34px",
-                    height: "34px",
+                    width: "32px",
+                    height: "32px",
                     borderRadius: "50%",
                     border: "none",
                     background: "#F4F4F2",
@@ -1391,13 +1311,33 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                     alignItems: "center",
                     justifyContent: "center",
                     cursor: "pointer",
+                    flexShrink: 0,
                   }}
                 >
-                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#1D1D1B" strokeWidth="2">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#1D1D1B" strokeWidth="2">
                     <path d="M8 20V4M4 8l4-4 4 4M16 4v16M12 16l4 4 4-4" />
                   </svg>
                 </button>
-              </div>
+
+                <button
+                  type="submit"
+                  disabled={loading}
+                  style={{
+                    height: "32px",
+                    padding: "0 10px",
+                    borderRadius: "8px",
+                    border: "none",
+                    background: "#FFD400",
+                    color: "#1D1D1B",
+                    fontSize: "12px",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    flexShrink: 0,
+                  }}
+                >
+                  {loading ? "..." : "Ir"}
+                </button>
+              </form>
             </div>
 
             {/* BOTTOM SHEET CONTAINER */}
@@ -1637,8 +1577,32 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                   color: "#1D1D1B",
                 }}
               >
-                A opção recomendada garante <strong>{sortedRoutes[0]?.score || 91}% de viagens a horas</strong> (limiar ≥ 70%), com caminhadas combinadas num único bloco.
+                {loading ? (
+                  <span>A calcular rotas reais e simulação Monte Carlo em tempo real...</span>
+                ) : sortedRoutes.length > 0 ? (
+                  <span>
+                    A opção recomendada garante <strong>{sortedRoutes[0]?.score}% de viagens a horas</strong> (limiar ≥ 70%), com caminhadas combinadas num único bloco.
+                  </span>
+                ) : (
+                  <span>Introduza origem e destino e toque em Ir para simular rotas reais.</span>
+                )}
               </div>
+
+              {errorMsg && (
+                <div
+                  style={{
+                    margin: "0 14px 10px",
+                    padding: "10px 12px",
+                    borderRadius: "8px",
+                    background: "#FEE2E2",
+                    color: "#991B1B",
+                    fontSize: "12px",
+                    fontWeight: 500,
+                  }}
+                >
+                  {errorMsg}
+                </div>
+              )}
 
               {/* ROUTE CARDS LIST */}
               <div
