@@ -423,7 +423,9 @@ export default function App() {
                         {showPercentages && (
                           <div>
                             <span className="text-[10px] text-slate-500 uppercase block font-medium">Reliability</span>
-                            <span className={`font-bold font-mono text-sm ${tier.text}`}>{r.metrics.win_rate}%</span>
+                            <span className={`font-bold font-mono text-sm ${tier.text}`}>
+                              {r.metrics.reliability_score ?? r.metrics.win_rate}%
+                            </span>
                           </div>
                         )}
                         <div>
@@ -450,7 +452,7 @@ export default function App() {
                   </span>
                   {showPercentages && (
                     <span className={`text-xs font-mono font-bold ${activeTier.text}`}>
-                      {activeRoute.metrics.win_rate}% On-Time Win Rate
+                      {activeRoute.metrics.reliability_score ?? activeRoute.metrics.win_rate}% On-Time Reliability
                     </span>
                   )}
                 </div>

@@ -24,16 +24,18 @@ ALTERNATIVE_GROUPS = {
 
 # Average headways in minutes for [peak, midday, evening, overnight, weekend]
 HEADWAY_DATA = {
-    "AZUL": {"peak": 4.0, "midday": 6.0, "evening": 8.0, "overnight": None, "weekend": 8.0},
-    "AMARELA": {"peak": 4.0, "midday": 6.0, "evening": 8.0, "overnight": None, "weekend": 8.0},
-    "VERDE": {"peak": 4.0, "midday": 6.0, "evening": 8.0, "overnight": None, "weekend": 8.0},
-    "VERMELHA": {"peak": 5.0, "midday": 7.0, "evening": 9.0, "overnight": None, "weekend": 9.0},
-    "CP_SINTRA": {"peak": 10.0, "midday": 20.0, "evening": 20.0, "overnight": None, "weekend": 20.0},
-    "CP_CASCAIS": {"peak": 12.0, "midday": 20.0, "evening": 20.0, "overnight": None, "weekend": 20.0},
-    "CP_AZAMBUJA": {"peak": 15.0, "midday": 30.0, "evening": 30.0, "overnight": None, "weekend": 30.0},
-    "FERTAGUS": {"peak": 10.0, "midday": 20.0, "evening": 20.0, "overnight": None, "weekend": 20.0},
+    "AZUL": {"peak": 4.0, "midday": 5.0, "evening": 7.0, "overnight": None, "weekend": 7.0},
+    "AMARELA": {"peak": 4.0, "midday": 5.0, "evening": 7.0, "overnight": None, "weekend": 7.0},
+    "VERDE": {"peak": 4.0, "midday": 5.0, "evening": 7.0, "overnight": None, "weekend": 7.0},
+    "VERMELHA": {"peak": 5.0, "midday": 6.0, "evening": 8.0, "overnight": None, "weekend": 8.0},
+    "CP_SINTRA": {"peak": 10.0, "midday": 15.0, "evening": 20.0, "overnight": None, "weekend": 20.0},
+    "CP_CASCAIS": {"peak": 10.0, "midday": 15.0, "evening": 20.0, "overnight": None, "weekend": 20.0},
+    "CP_AZAMBUJA": {"peak": 15.0, "midday": 20.0, "evening": 30.0, "overnight": None, "weekend": 30.0},
+    "FERTAGUS": {"peak": 10.0, "midday": 15.0, "evening": 20.0, "overnight": None, "weekend": 20.0},
     "FERRY": {"peak": 15.0, "midday": 20.0, "evening": 30.0, "overnight": None, "weekend": 20.0},
-    "DEFAULT": {"peak": 10.0, "midday": 15.0, "evening": 20.0, "overnight": 30.0, "weekend": 15.0},
+    "CARRIS_TRAM": {"peak": 7.0, "midday": 8.0, "evening": 10.0, "overnight": 20.0, "weekend": 10.0},
+    "CARRIS_BUS": {"peak": 5.0, "midday": 7.0, "evening": 9.0, "overnight": 15.0, "weekend": 8.0},
+    "DEFAULT": {"peak": 6.0, "midday": 8.0, "evening": 10.0, "overnight": 15.0, "weekend": 8.0},
 }
 
 
@@ -76,5 +78,12 @@ def find_alternatives(
 
 def get_headway(line_id: str, time_of_day: str = "peak") -> Optional[float]:
     clean_line = line_id.strip().upper()
-    data = HEADWAY_DATA.get(clean_line, HEADWAY_DATA["DEFAULT"])
+    if clean_line in HEADWAY_DATA:
+        data = HEADWAY_DATA[clean_line]
+    elif any(tram in clean_line for tram in ["15E", "28E", "12E", "18E", "24E", "T15", "T28"]):
+        data = HEADWAY_DATA["CARRIS_TRAM"]
+    elif any(clean_line.startswith(p) for p in ["7", "1", "2", "3", "4", "5", "6", "8", "9"]):
+        data = HEADWAY_DATA["CARRIS_BUS"]
+    else:
+        data = HEADWAY_DATA.get(clean_line, HEADWAY_DATA["DEFAULT"])
     return data.get(time_of_day)

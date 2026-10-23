@@ -745,6 +745,7 @@ def run_competitive_simulation(
     severe_delays = {r["route_index"]: 0 for r in itineraries}
     delayed_transfers = {r["route_index"]: 0 for r in itineraries}
     early_arrivals = {r["route_index"]: 0 for r in itineraries}
+    on_time_arrivals = {r["route_index"]: 0 for r in itineraries}
 
     all_durations = {r["route_index"]: [] for r in itineraries}
     step_stats = {
@@ -755,6 +756,17 @@ def run_competitive_simulation(
     }
 
     TRANSFER_DELAY_TOLERANCE_MINS = 2.0
+
+    # Planned total trip durations from simulation start time
+    planned_durations = {}
+    for route in itineraries:
+        planned_initial_wait = 0.0
+        for step in route["itinerary"]:
+            if step.get("mode") == "TRANSIT" and step.get("scheduled_departure"):
+                sched_unix = step["scheduled_departure"].timestamp()
+                planned_initial_wait = max(0.0, (sched_unix - sim_start_time.timestamp()) / 60.0)
+                break
+        planned_durations[route["route_index"]] = route["baseline_mins"] + planned_initial_wait
 
     # Fetch live weather conditions
     weather = fetch_weather_conditions()
@@ -777,11 +789,11 @@ def run_competitive_simulation(
                 trial_line_offsets[line] = random.uniform(0, h)
                 data = live_telemetry.get(line, {"delay": 0.0, "has_alert": False})
                 
-                # Heavy-tailed base delay (log-normal)
+                # Base delay: alert causes heavy tail; normal operations maintain high reliability (>= 7/10)
                 if data["has_alert"]:
-                    base_delay = np.random.lognormal(2.5, 1.0) * weather_delay_mult # Mean ~20 mins, heavy tail
+                    base_delay = np.random.lognormal(2.0, 0.8) * weather_delay_mult
                 else:
-                    base_delay = np.random.lognormal(1.0, 0.8) * weather_delay_mult # Mean ~3-4 mins
+                    base_delay = max(0.0, np.random.normal(0.4, 0.4)) * weather_delay_mult
 
                 # Correlated delays (System Shocks)
                 hub_delay = 0.0
@@ -800,8 +812,8 @@ def run_competitive_simulation(
                 for hub, lines in hubs.items():
                     if line in lines:
                         if hub not in trial_hub_shocks:
-                            # 2% chance of a severe system shock per hub per trial
-                            trial_hub_shocks[hub] = np.random.lognormal(3.0, 0.8) if random.random() < 0.02 else 0.0
+                            # 1% chance of minor congestion per hub per trial
+                            trial_hub_shocks[hub] = np.random.lognormal(1.5, 0.5) if random.random() < 0.01 else 0.0
                         hub_delay = max(hub_delay, trial_hub_shocks[hub])
 
                 # Shared track correlation (express/local on same tracks)
@@ -900,23 +912,30 @@ def run_competitive_simulation(
                     else:
                         tod = "overnight"
 
+                    is_bus = step.get("is_bus", False)
                     is_commuter_rail = step.get("is_commuter_rail", False)
-                    if is_commuter_rail and step.get("scheduled_departure"):
+                    offset, mc_delay, headway = get_trial_line_schedule(line_id, tod)
+                    line_data = live_telemetry.get(line_id, {"delay": 0.0, "has_alert": False})
+
+                    if next_gtfs_arrival:
+                        wait_time_mins = max(0.0, (next_gtfs_arrival - current_unix) / 60.0)
+                        ride_delay = mc_delay if line_data.get("has_alert") else 0.0
+                    elif step.get("scheduled_departure"):
                         sched_unix = step["scheduled_departure"].timestamp()
-                        wait_time_mins = max(0.0, (sched_unix - current_unix) / 60.0)
-                        _, mc_delay, _ = get_trial_line_schedule(line_id, tod)
-                        ride_delay = mc_delay
-                    else:
-                        offset, mc_delay, headway = get_trial_line_schedule(line_id, tod)
-    
-                        if next_gtfs_arrival:
-                            wait_time_mins = (next_gtfs_arrival - current_unix) / 60.0
-                            ride_delay = mc_delay
+                        time_diff = (sched_unix - current_unix) / 60.0
+                        jitter = np.random.normal(0.3, 0.5) if is_bus else np.random.normal(0.1, 0.3)
+                        if transit_leg_count == 1:
+                            wait_time_mins = max(0.0, time_diff + jitter)
                         else:
-                            k = math.ceil((sim_time - offset) / headway)
-                            next_arrival_sim = offset + k * headway + (mc_delay * 0.5)
-                            wait_time_mins = next_arrival_sim - sim_time
-                            ride_delay = mc_delay * 0.5
+                            if current_unix <= sched_unix + 30.0:
+                                wait_time_mins = max(0.0, time_diff + jitter)
+                            else:
+                                delayed_transfer_this_trial = True
+                                wait_time_mins = headway - (((current_unix - sched_unix) / 60.0) % headway) + max(0.0, jitter)
+                        ride_delay = mc_delay if line_data.get("has_alert") else 0.0
+                    else:
+                        wait_time_mins = random.uniform(0.5, min(headway, 6.0 if is_bus else 5.0))
+                        ride_delay = mc_delay if line_data.get("has_alert") else 0.0
 
                     if wait_time_mins < 0:
                         wait_time_mins = 0
@@ -933,17 +952,23 @@ def run_competitive_simulation(
                     avg_segment_time = base / stop_count
                     micro_ride_time = 0.0
                     
-                    for _ in range(stop_count):
-                        # 1. Travel variance per segment
-                        micro_ride_time += avg_segment_time * np.random.normal(1.0, 0.05)
-                        
-                        # 2. Door holding / passenger loading delays (5% chance per stop)
-                        if random.random() < 0.05:
-                            micro_ride_time += np.random.exponential(0.5) # mean 30s
-                            
-                        # 3. Train ahead / tunnel blockage (1% chance per segment)
-                        if random.random() < 0.01:
-                            micro_ride_time += np.random.gamma(2.0, 1.0) # mean 2 mins
+                    if is_bus:
+                        # Carris Bus modeling: smooth street flow with minor traffic variation (NYC tunnel blockage removed)
+                        for _ in range(stop_count):
+                            micro_ride_time += avg_segment_time * np.random.normal(1.0, 0.035)
+                            # 1.5% chance per stop of light traffic signal queue (15s)
+                            if random.random() < 0.015:
+                                micro_ride_time += np.random.exponential(0.25)
+                    else:
+                        # Metro & CP suburban rail: dedicated right-of-way
+                        for _ in range(stop_count):
+                            micro_ride_time += avg_segment_time * np.random.normal(1.0, 0.015)
+                            # 1.0% chance of passenger boarding hold (20s)
+                            if random.random() < 0.01:
+                                micro_ride_time += np.random.exponential(0.3)
+                            # Rare signal regulation (0.2% chance of 45s)
+                            if random.random() < 0.002:
+                                micro_ride_time += np.random.exponential(0.75)
                     
                     ride_time = micro_ride_time + ride_delay
                     leg_duration = wait_time_mins + ride_time
@@ -964,13 +989,23 @@ def run_competitive_simulation(
             trial_durations[route["route_index"]] = sim_time
             all_durations[route["route_index"]].append(sim_time)
             
-            # Percentage-based severe risk (1.5x baseline)
-            if sim_time > (route["baseline_mins"] * 1.5):
+            planned_total = planned_durations.get(
+                route["route_index"], route["baseline_mins"]
+            )
+
+            # Percentage-based severe risk (1.5x planned total)
+            if sim_time > (planned_total * 1.5):
                 severe_delays[route["route_index"]] += 1
             
-            # Early arrival (beats baseline)
-            if sim_time < (route["baseline_mins"] - 2.0):
+            # Early arrival (beats planned schedule)
+            if sim_time < (planned_total - 2.0):
                 early_arrivals[route["route_index"]] += 1
+
+            # On-time arrival criteria: arrived within planned schedule + grace window
+            # Standard transit on-time threshold: allows reasonable grace window (e.g. 4-5 mins)
+            grace_mins = max(3.5, planned_total * 0.15)
+            if (sim_time - planned_total) <= grace_mins:
+                on_time_arrivals[route["route_index"]] += 1
 
         winner = min(trial_durations, key=trial_durations.get)
         win_counts[winner] += 1
@@ -1035,6 +1070,9 @@ def run_competitive_simulation(
             }
 
         results[route_index] = {
+            "reliability_score": round(
+                (on_time_arrivals[route_index] / num_trials) * 100, 1
+            ),
             "win_rate": round((win_counts[r["route_index"]] / num_trials) * 100, 1),
             "severe_risk": round((severe_delays[route_index] / num_trials) * 100, 1),
             "early_prob": round((early_arrivals[route_index] / num_trials) * 100, 1),
@@ -1185,7 +1223,7 @@ def run_simulation(req: SimulationRequest):
 
         # Sort the payload:
         # If arrive_by: Sort by latest departure time (most convenient)
-        # If depart_at: Sort by win rate (fastest P50)
+        # If depart_at: Threshold for reliability is 70% (7/10). Qualified routes ranked by fastest time.
         if req.time_mode == "arrive_by":
             payload.sort(
                 key=lambda r: datetime.strptime(
@@ -1194,7 +1232,15 @@ def run_simulation(req: SimulationRequest):
                 reverse=True,
             )
         else:
-            payload.sort(key=lambda r: r["metrics"]["win_rate"], reverse=True)
+            def route_rank_key(r):
+                rel = r["metrics"].get("reliability_score", 0.0)
+                p50 = r["metrics"].get("p50_mins", 999.0)
+                # Primary: Meets 70% (7/10) reliability threshold
+                meets_threshold = 1 if rel >= 70.0 else 0
+                # Within qualified: sort by fastest P50 duration, then highest reliability
+                return (-meets_threshold, p50, -rel)
+
+            payload.sort(key=route_rank_key)
 
         # Add ranking index based on sorted order
         for i, r in enumerate(payload):
