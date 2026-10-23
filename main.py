@@ -97,6 +97,55 @@ def clean_line_id(line_id: str) -> str:
     return metro_map.get(token, token)
 
 
+def clean_display_destination(name: str) -> str:
+    """Simplifies destination/stop names by removing redundant city/country and station noise."""
+    cleaned = str(name or "").strip()
+    for prefix in [
+        "Estação de ", "Estação do ", "Estação da ", "Estação dos ", "Estação das ", "Estação ",
+        "Estacao de ", "Estacao do ", "Estacao da ", "Estacao ",
+    ]:
+        if cleaned.lower().startswith(prefix.lower()):
+            cleaned = cleaned[len(prefix):].strip()
+    for suffix in [
+        ", Lisboa, Portugal",
+        ", Lisbon, Portugal",
+        ", Lisboa",
+        ", Lisbon",
+        ", Portugal",
+        " Station",
+        " Estação",
+        " Estacao",
+    ]:
+        if cleaned.lower().endswith(suffix.lower()):
+            cleaned = cleaned[: -len(suffix)].strip()
+    return cleaned
+
+
+def compress_consecutive_walk_steps(itinerary: List[Dict]) -> List[Dict]:
+    """Combines consecutive WALK steps into a single unified step with summed duration."""
+    compressed = []
+    for step in itinerary:
+        if step.get("mode") == "WALK":
+            dur = step.get("baseline_duration", 0.0)
+            if compressed and compressed[-1].get("mode") == "WALK":
+                # Merge into the existing walk step
+                compressed[-1]["baseline_duration"] += dur
+                if step.get("arrival_stop") and step["arrival_stop"] != "N/A":
+                    clean_arr = clean_display_destination(step["arrival_stop"])
+                    compressed[-1]["arrival_stop"] = clean_arr
+                    compressed[-1]["line_display"] = f"Walk to {clean_arr}"
+                continue
+            else:
+                if step.get("arrival_stop") and step["arrival_stop"] != "N/A":
+                    clean_arr = clean_display_destination(step["arrival_stop"])
+                    step["arrival_stop"] = clean_arr
+                    step["line_display"] = f"Walk to {clean_arr}"
+                elif step.get("line_display"):
+                    step["line_display"] = clean_display_destination(step["line_display"])
+        compressed.append(step)
+    return compressed
+
+
 def estimate_commuter_rail_fare(duration_mins: float) -> float:
     """Estimate CP suburban train fare based on zones."""
     if duration_mins <= 20:
@@ -417,6 +466,16 @@ def fetch_google_itineraries(
                         )
                         break
 
+                clean_dest = clean_display_destination(next_stop)
+                walk_display = f"Walk to {clean_dest}" if clean_dest else "Walk"
+
+                # If previous step was already a WALK step, combine into one instruction block
+                if raw_steps and raw_steps[-1]["mode"] == "WALK":
+                    raw_steps[-1]["baseline_duration"] += dur
+                    raw_steps[-1]["line_display"] = walk_display
+                    raw_steps[-1]["arrival_stop"] = clean_dest
+                    continue
+
                 raw_steps.append(
                     {
                         "mode": "WALK",
@@ -427,8 +486,8 @@ def fetch_google_itineraries(
                         "is_commuter_rail": False,
                         "line_name": "Walk",
                         "departure_stop": "N/A",
-                        "arrival_stop": "N/A",
-                        "line_display": f"Walk to {next_stop}",
+                        "arrival_stop": clean_dest,
+                        "line_display": walk_display,
                         "scheduled_departure": None,
                     }
                 )
@@ -504,6 +563,8 @@ def fetch_google_itineraries(
                         "scheduled_departure": sched_dep,
                     }
                 )
+
+        raw_steps = compress_consecutive_walk_steps(raw_steps)
 
         parsed.append(
             {
@@ -1176,13 +1237,14 @@ def run_simulation(req: SimulationRequest):
                         "scheduled_departure"
                     ].isoformat()
 
+            clean_dest = clean_display_destination(req.destination)
             route_data["itinerary"].append(
                 {
                     "mode": "ARRIVE",
                     "baseline_duration": 0,
                     "line_display": "Destination Reached",
                     "departure_stop": "N/A",
-                    "arrival_stop": req.destination,
+                    "arrival_stop": clean_dest,
                     "expected_board_time": m["est_arrival_time"],
                     "expected_wait_mins": 0,
                 }

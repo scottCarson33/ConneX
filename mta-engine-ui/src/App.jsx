@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   MapPin,
   ArrowRight,
@@ -164,6 +164,26 @@ export default function App() {
 
   const activeRoute = results[activeRouteIdx] || results[0];
   const activeTier = activeRoute ? getRankTier(activeRouteIdx) : null;
+
+  // Combine consecutive walk instructions into a single block with simple instructions
+  const displaySteps = useMemo(() => {
+    if (!activeRoute?.itinerary) return [];
+    const merged = [];
+    for (const step of activeRoute.itinerary) {
+      if (step.mode === "WALK") {
+        if (merged.length > 0 && merged[merged.length - 1].mode === "WALK") {
+          const prev = merged[merged.length - 1];
+          prev.baseline_duration = (prev.baseline_duration || 0) + (step.baseline_duration || 0);
+          if (step.line_display && step.line_display.toLowerCase().includes("walk to")) {
+            prev.line_display = step.line_display;
+          }
+          continue;
+        }
+      }
+      merged.push({ ...step });
+    }
+    return merged;
+  }, [activeRoute]);
 
   return (
     <div className="min-h-screen bg-[#0a0a0c] text-slate-100 font-sans antialiased selection:bg-amber-500/30">
@@ -500,9 +520,16 @@ export default function App() {
                 </h3>
 
                 <div className="relative pl-6 space-y-5 before:absolute before:left-2.5 before:top-3 before:bottom-3 before:w-0.5 before:bg-white/[0.08]">
-                  {activeRoute.itinerary.map((step, idx) => {
+                  {displaySteps.map((step, idx) => {
                     const isArrive = step.mode === "ARRIVE";
                     const isTransit = step.mode === "TRANSIT";
+                    const isWalk = step.mode === "WALK";
+
+                    // Clean and simplify display instruction
+                    const cleanTitle = (step.line_display || "")
+                      .replace(/, Lisboa(, Portugal)?/gi, "")
+                      .replace(/, Portugal/gi, "")
+                      .trim() || (isWalk ? "Walk" : "Transit");
 
                     return (
                       <div key={idx} className="relative group">
@@ -525,7 +552,7 @@ export default function App() {
                             </div>
                             <div>
                               <div className="font-semibold text-sm text-white">
-                                {step.line_display}
+                                {cleanTitle}
                               </div>
 
                               {isTransit && (
@@ -556,7 +583,7 @@ export default function App() {
 
                           {!isArrive && step.baseline_duration > 0 && (
                             <span className="text-xs font-mono font-semibold text-slate-400 shrink-0 bg-white/[0.03] px-2 py-1 rounded">
-                              {Math.round(step.baseline_duration)} min
+                              {Math.max(1, Math.round(step.baseline_duration))} min
                             </span>
                           )}
                         </div>
