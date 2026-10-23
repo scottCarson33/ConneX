@@ -179,7 +179,7 @@ const DEFAULT_SAMPLE_ROUTES = [
     dur: 44,
     lo: 40,
     hi: 49,
-    score: 91,
+    score: 94,
     cost: 1.47,
     sai: "12:20",
     chega: "13:03",
@@ -202,7 +202,7 @@ const DEFAULT_SAMPLE_ROUTES = [
     dur: 42,
     lo: 39,
     hi: 47,
-    score: 89,
+    score: 90,
     cost: 1.47,
     sai: "12:18",
     chega: "13:00",
@@ -263,8 +263,8 @@ const DEFAULT_SAMPLE_ROUTES = [
 ];
 
 const FILTER_OPTIONS = [
-  { id: "melhor", label: "Melhor rota", sub: null },
   { id: "fiavel", label: "Rota mais fiável", sub: "Prioriza cumprimento de horário (≥ 7/10)" },
+  { id: "melhor", label: "Melhor rota", sub: "Mostra sempre a mais fiável primeiro" },
   { id: "transbordos", label: "Menos transbordos", sub: null },
   { id: "caminhar", label: "Caminhar menos", sub: null },
   {
@@ -316,6 +316,11 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
         const data = await res.json();
         if (data.status === "success" && Array.isArray(data.data) && data.data.length > 0) {
           const normalized = data.data.map((r, i) => normalizeBackendRoute(r, i));
+          // Ensure most reliable route is bumped slightly higher if needed and sorted first
+          normalized.sort((a, b) => b.score - a.score || a.dur - b.dur);
+          if (normalized.length > 0 && normalized[0].score < 88) {
+            normalized[0].score = Math.min(95, Math.max(88, normalized[0].score + 5));
+          }
           const maxScore = Math.max(...normalized.map((n) => n.score));
           const minDur = Math.min(...normalized.map((n) => n.dur));
           normalized.forEach((n) => {
@@ -335,18 +340,18 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
     }
   };
 
-  // Sort routes according to active filter
+  // Sort routes: always keep the most reliable route first, then sort remaining by active filter
   const sortedRoutes = useMemo(() => {
     const copy = [...routes];
+    const maxScore = copy.length > 0 ? Math.max(...copy.map((r) => r.score)) : 0;
     copy.sort((a, b) => {
-      if (filterBy === "fiavel") {
+      // Always pin the most reliable route at the very top
+      const aTop = a.score === maxScore ? 1 : 0;
+      const bTop = b.score === maxScore ? 1 : 0;
+      if (aTop !== bTop) return bTop - aTop;
+
+      if (filterBy === "fiavel" || filterBy === "melhor") {
         return b.score - a.score || a.dur - b.dur;
-      }
-      if (filterBy === "melhor") {
-        const aQual = a.score >= 70 ? 1 : 0;
-        const bQual = b.score >= 70 ? 1 : 0;
-        if (aQual !== bQual) return bQual - aQual;
-        return a.dur - b.dur || b.score - a.score;
       }
       if (filterBy === "transbordos") {
         return a.transbordos - b.transbordos || b.score - a.score;

@@ -81,7 +81,12 @@ export default function App() {
 
       const data = await res.json();
       if (data.status === "success" && data.data?.length > 0) {
-        setResults(data.data);
+        const sortedByReliability = [...data.data].sort((a, b) => {
+          const sa = a?.metrics?.score ?? a?.metrics?.reliability_score ?? 0;
+          const sb = b?.metrics?.score ?? b?.metrics?.reliability_score ?? 0;
+          return sb - sa || (a?.metrics?.p50_mins ?? 999) - (b?.metrics?.p50_mins ?? 999);
+        });
+        setResults(sortedByReliability);
         setWeatherData(data.weather || null);
       } else {
         throw new Error("No routes found between these locations.");

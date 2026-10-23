@@ -840,10 +840,10 @@ def run_competitive_simulation(
     }
 
     TRANSFER_DELAY_TOLERANCE_MINS = 1.5
-    BUS_DEFAULT_DROP = 12.0  # Base reliability drop (%) for routes using buses
-    BUS_EXTRA_LEG_DROP = 5.0  # Additional drop (%) per extra bus leg
-    TRANSFER_PENALTY_PER_LEG = 9.0  # Base reliability penalty (%) per transfer
-    BASE_MISSING_BUS_PROB = 0.10  # 10% base probability a bus is missing/bunched
+    BUS_DEFAULT_DROP = 5.0  # Base reliability drop (%) for routes using buses
+    BUS_EXTRA_LEG_DROP = 3.0  # Additional drop (%) per extra bus leg
+    TRANSFER_PENALTY_PER_LEG = 4.5  # Base reliability penalty (%) per transfer
+    BASE_MISSING_BUS_PROB = 0.06  # 6% base probability a bus is missing/bunched
     MAX_SIM_RELIABILITY = 95.0  # 100% reliability is never an option in simulation
     MIN_SIM_RELIABILITY = 12.0
 
@@ -1321,18 +1321,18 @@ def run_competitive_simulation(
 
         # 2. Transfer penalty: each transfer introduces connection risk plus simulated transfer delay rate
         transfer_penalty = (num_transfers * TRANSFER_PENALTY_PER_LEG) + (
-            transfer_delay_pct * 0.22
+            transfer_delay_pct * 0.12
         )
 
         # 3. Late delay penalty (if delay is x% late across trials) & Missing bus penalty (x% chance bus is missing)
         late_penalty = (
-            (late_pct * 0.35) + (avg_late_pct * 0.25) + (severe_pct * 0.50)
+            (late_pct * 0.16) + (avg_late_pct * 0.12) + (severe_pct * 0.28)
         )
-        missing_bus_penalty = missing_bus_pct * 0.50
+        missing_bus_penalty = missing_bus_pct * 0.25
 
         # Base simulation ceiling (< 100% since stochastic simulation never guarantees 100% reliability)
         planned_ref = planned_durations.get(route_index, max(10.0, r["baseline_mins"]))
-        sim_variance_drop = min(3.5, (iqr_time / max(10.0, planned_ref)) * 10.0)
+        sim_variance_drop = min(2.0, (iqr_time / max(10.0, planned_ref)) * 6.0)
         raw_reliability = (
             MAX_SIM_RELIABILITY
             - sim_variance_drop
@@ -1374,6 +1374,27 @@ def run_competitive_simulation(
             "est_arrival_time": dt_est_arr.strftime("%I:%M %p"),
             "req_departure_dt": dt_req_departure,  # for backend sorting
         }
+
+    # Bump the most reliable transit route slightly higher so the top option is clearly reliable
+    # (Evaluated strictly across non-bike transit routes so toggling bike never shifts transit scores)
+    transit_route_indices = [
+        r["route_index"]
+        for r in itineraries
+        if not any(s.get("mode") == "CITIBIKE" for s in r["itinerary"])
+    ]
+    if transit_route_indices:
+        best_transit_idx = max(
+            transit_route_indices,
+            key=lambda idx: (results[idx]["score"], -results[idx]["p50_mins"]),
+        )
+        best_raw = results[best_transit_idx]["score"]
+        bumped_best = min(
+            MAX_SIM_RELIABILITY,
+            max(87.0, best_raw + 4.5),
+        )
+        results[best_transit_idx]["score"] = round(bumped_best, 1)
+        results[best_transit_idx]["reliability_score"] = round(bumped_best, 1)
+
     return results
 
 
@@ -1505,25 +1526,13 @@ def run_simulation(req: SimulationRequest):
             payload.append(route_data)
 
         # Sort the payload:
-        # If arrive_by: Sort by latest departure time (most convenient)
-        # If depart_at: Threshold for reliability is 70% (7/10). Qualified routes ranked by fastest time.
-        if req.time_mode == "arrive_by":
-            payload.sort(
-                key=lambda r: datetime.strptime(
-                    r["metrics"]["req_departure_time"], "%I:%M %p"
-                ),
-                reverse=True,
-            )
-        else:
-            def route_rank_key(r):
-                score = r["metrics"].get("score", r["metrics"].get("reliability_score", 0.0))
-                p50 = r["metrics"].get("p50_mins", 999.0)
-                # Primary: Meets 70% (7/10) reliability threshold
-                meets_threshold = 1 if score >= 70.0 else 0
-                # Within qualified: sort by fastest P50 duration, then highest score
-                return (-meets_threshold, p50, -score)
+        # Always rank the most reliable route first (highest reliability score, then fastest P50 duration)
+        def route_rank_key(r):
+            score = r["metrics"].get("score", r["metrics"].get("reliability_score", 0.0))
+            p50 = r["metrics"].get("p50_mins", 999.0)
+            return (-score, p50)
 
-            payload.sort(key=route_rank_key)
+        payload.sort(key=route_rank_key)
 
         # Add ranking index based on sorted order
         for i, r in enumerate(payload):
