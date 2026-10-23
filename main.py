@@ -1130,16 +1130,21 @@ def run_competitive_simulation(
                 "wait_mins": round(avg_wait, 1),
             }
 
+        # Absolute Route Reliability & Quality Score
+        # Computed independently per route: adding alternative routes (like bike) does NOT lower other route scores
+        on_time_pct = (on_time_arrivals[route_index] / num_trials) * 100.0
+        severe_pct = (severe_delays[route_index] / num_trials) * 100.0
+        transfer_delay_pct = (delayed_transfers[route_index] / num_trials) * 100.0
+
+        abs_score = max(0.0, min(100.0, on_time_pct - (severe_pct * 1.5) - (transfer_delay_pct * 0.15)))
+
         results[route_index] = {
-            "reliability_score": round(
-                (on_time_arrivals[route_index] / num_trials) * 100, 1
-            ),
+            "score": round(abs_score, 1),
+            "reliability_score": round(on_time_pct, 1),
             "win_rate": round((win_counts[r["route_index"]] / num_trials) * 100, 1),
-            "severe_risk": round((severe_delays[route_index] / num_trials) * 100, 1),
+            "severe_risk": round(severe_pct, 1),
             "early_prob": round((early_arrivals[route_index] / num_trials) * 100, 1),
-            "transfer_delay_prob": round(
-                (delayed_transfers[route_index] / num_trials) * 100, 1
-            ),
+            "transfer_delay_prob": round(transfer_delay_pct, 1),
             "exp_time": round(mean_time, 1),
             "p50_mins": round(p50_time, 1),
             "p90_mins": round(p90_time, 1),
@@ -1295,12 +1300,12 @@ def run_simulation(req: SimulationRequest):
             )
         else:
             def route_rank_key(r):
-                rel = r["metrics"].get("reliability_score", 0.0)
+                score = r["metrics"].get("score", r["metrics"].get("reliability_score", 0.0))
                 p50 = r["metrics"].get("p50_mins", 999.0)
                 # Primary: Meets 70% (7/10) reliability threshold
-                meets_threshold = 1 if rel >= 70.0 else 0
-                # Within qualified: sort by fastest P50 duration, then highest reliability
-                return (-meets_threshold, p50, -rel)
+                meets_threshold = 1 if score >= 70.0 else 0
+                # Within qualified: sort by fastest P50 duration, then highest score
+                return (-meets_threshold, p50, -score)
 
             payload.sort(key=route_rank_key)
 

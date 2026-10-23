@@ -91,12 +91,16 @@ export default function App() {
     }
   };
 
-  const getRankTier = (index) => {
-    if (index === 0) {
+  const getRankTier = (route, index) => {
+    // Quality tiers are strictly based on absolute score, so adding bikes or other options never lowers tiers
+    const score = route?.metrics?.score ?? route?.metrics?.reliability_score ?? 100;
+    const isWinner = index === 0;
+
+    if (score >= 85) {
       return {
-        label: "OPTIMAL",
-        badge: "Rank 1: Best Choice",
-        description: "Fastest travel time & highest reliability",
+        label: isWinner ? "OPTIMAL" : "EXCELLENT",
+        badge: isWinner ? "Rank 1: Best Choice" : `Rank ${index + 1}: Excellent Choice`,
+        description: isWinner ? "Fastest travel time & high reliability" : "High reliability & dependable arrival",
         bar: "bg-emerald-500",
         text: "text-emerald-400",
         bg: "bg-emerald-950/20",
@@ -107,11 +111,11 @@ export default function App() {
         badgeBg: "bg-emerald-500/20 text-emerald-300 border-emerald-500/40",
         dot: "bg-emerald-500 border-emerald-300 ring-emerald-500/20",
       };
-    } else if (index === 1) {
+    } else if (score >= 70) {
       return {
         label: "GOOD",
-        badge: "Rank 2: Good Alternative",
-        description: "Solid backup with minor variance",
+        badge: `Rank ${index + 1}: Good Choice`,
+        description: "Solid option meeting reliability threshold",
         bar: "bg-sky-500",
         text: "text-sky-400",
         bg: "bg-sky-950/20",
@@ -122,10 +126,10 @@ export default function App() {
         badgeBg: "bg-sky-500/20 text-sky-300 border-sky-500/40",
         dot: "bg-sky-500 border-sky-300 ring-sky-500/20",
       };
-    } else if (index === 2) {
+    } else if (score >= 50) {
       return {
         label: "FAIR",
-        badge: "Rank 3: Slower / Moderate Risk",
+        badge: `Rank ${index + 1}: Moderate Risk`,
         description: "Higher transfer overhead or lower frequency",
         bar: "bg-amber-500",
         text: "text-amber-400",
@@ -163,7 +167,7 @@ export default function App() {
   };
 
   const activeRoute = results[activeRouteIdx] || results[0];
-  const activeTier = activeRoute ? getRankTier(activeRouteIdx) : null;
+  const activeTier = activeRoute ? getRankTier(activeRoute, activeRouteIdx) : null;
 
   // Combine consecutive walk instructions into a single block with simple instructions
   const displaySteps = useMemo(() => {
@@ -396,7 +400,7 @@ export default function App() {
 
               <div className="space-y-2.5">
                 {results.map((r, idx) => {
-                  const tier = getRankTier(idx);
+                  const tier = getRankTier(r, idx);
                   const isSelected = idx === activeRouteIdx;
 
                   return (
@@ -444,7 +448,7 @@ export default function App() {
                           <div>
                             <span className="text-[10px] text-slate-500 uppercase block font-medium">Reliability</span>
                             <span className={`font-bold font-mono text-sm ${tier.text}`}>
-                              {r.metrics.reliability_score ?? r.metrics.win_rate}%
+                              {r.metrics.score ?? r.metrics.reliability_score}%
                             </span>
                           </div>
                         )}
@@ -472,7 +476,7 @@ export default function App() {
                   </span>
                   {showPercentages && (
                     <span className={`text-xs font-mono font-bold ${activeTier.text}`}>
-                      {activeRoute.metrics.reliability_score ?? activeRoute.metrics.win_rate}% On-Time Reliability
+                      {activeRoute.metrics.score ?? activeRoute.metrics.reliability_score}% On-Time Reliability
                     </span>
                   )}
                 </div>
