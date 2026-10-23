@@ -13,6 +13,7 @@ import {
   ArrowUpDown,
   Navigation,
   CheckCircle2,
+  Percent,
 } from "lucide-react";
 
 export default function App() {
@@ -26,6 +27,8 @@ export default function App() {
   const [weatherData, setWeatherData] = useState(null);
   const [error, setError] = useState("");
   const [activeRouteIdx, setActiveRouteIdx] = useState(0);
+  const [allowBike, setAllowBike] = useState(false);
+  const [showPercentages, setShowPercentages] = useState(false);
 
   const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -65,6 +68,7 @@ export default function App() {
           destination,
           target_time: currentTarget.toISOString(),
           time_mode: timeMode,
+          allow_bike: allowBike,
         }),
       });
 
@@ -239,42 +243,76 @@ export default function App() {
               </div>
             </div>
 
-            {/* Departure Options */}
-            <div className="pt-2 flex items-center justify-between text-xs text-slate-400">
-              <button
-                type="button"
-                onClick={() => setShowTimePicker(!showTimePicker)}
-                className="flex items-center gap-1.5 hover:text-slate-200 transition-colors cursor-pointer"
-              >
-                <CalendarDays className="w-3.5 h-3.5 text-amber-400" />
-                <span>{showTimePicker ? "Custom time" : "Departing now"}</span>
-              </button>
-              {showTimePicker && (
-                <div className="flex gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setTimeMode("depart_at")}
-                    className={`px-2 py-0.5 rounded text-[11px] cursor-pointer ${
-                      timeMode === "depart_at"
-                        ? "bg-amber-500/20 text-amber-400"
-                        : "text-slate-500"
-                    }`}
-                  >
-                    Depart
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTimeMode("arrive_by")}
-                    className={`px-2 py-0.5 rounded text-[11px] cursor-pointer ${
-                      timeMode === "arrive_by"
-                        ? "bg-emerald-500/20 text-emerald-400"
-                        : "text-slate-500"
-                    }`}
-                  >
-                    Arrive
-                  </button>
-                </div>
-              )}
+            {/* Departure Options & Bike Toggle */}
+            <div className="pt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowTimePicker(!showTimePicker)}
+                  className="flex items-center gap-1.5 hover:text-slate-200 transition-colors cursor-pointer"
+                >
+                  <CalendarDays className="w-3.5 h-3.5 text-amber-400" />
+                  <span>{showTimePicker ? "Custom time" : "Departing now"}</span>
+                </button>
+                {showTimePicker && (
+                  <div className="flex gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setTimeMode("depart_at")}
+                      className={`px-2 py-0.5 rounded text-[11px] cursor-pointer ${
+                        timeMode === "depart_at"
+                          ? "bg-amber-500/20 text-amber-400"
+                          : "text-slate-500"
+                      }`}
+                    >
+                      Depart
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTimeMode("arrive_by")}
+                      className={`px-2 py-0.5 rounded text-[11px] cursor-pointer ${
+                        timeMode === "arrive_by"
+                          ? "bg-emerald-500/20 text-emerald-400"
+                          : "text-slate-500"
+                      }`}
+                    >
+                      Arrive
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2">
+                {/* Bike Toggle Button */}
+                <button
+                  type="button"
+                  onClick={() => setAllowBike(!allowBike)}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border transition-all cursor-pointer text-xs ${
+                    allowBike
+                      ? "bg-sky-500/15 border-sky-500/30 text-sky-300 font-medium"
+                      : "bg-white/[0.03] border-white/10 text-slate-500 hover:text-slate-400"
+                  }`}
+                  title={allowBike ? "Gira bikes included in simulation" : "Gira bikes excluded"}
+                >
+                  <Bike className={`w-3.5 h-3.5 ${allowBike ? "text-sky-400" : "text-slate-500"}`} />
+                  <span>Bikes: {allowBike ? "ON" : "OFF"}</span>
+                </button>
+
+                {/* Percentage Toggle Button */}
+                <button
+                  type="button"
+                  onClick={() => setShowPercentages(!showPercentages)}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border transition-all cursor-pointer text-xs ${
+                    showPercentages
+                      ? "bg-amber-500/15 border-amber-500/30 text-amber-300 font-medium"
+                      : "bg-white/[0.03] border-white/10 text-slate-500 hover:text-slate-400"
+                  }`}
+                  title={showPercentages ? "Percentages visible" : "Percentages hidden"}
+                >
+                  <Percent className={`w-3 h-3 ${showPercentages ? "text-amber-400" : "text-slate-500"}`} />
+                  <span>Percentages: {showPercentages ? "ON" : "OFF"}</span>
+                </button>
+              </div>
             </div>
 
             {showTimePicker && (
@@ -322,7 +360,18 @@ export default function App() {
             <div>
               <div className="flex items-center justify-between text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3 px-1">
                 <span>Route Rankings (Color-Coded)</span>
-                <span className="text-slate-500 lowercase font-normal">click to inspect</span>
+                <button
+                  type="button"
+                  onClick={() => setShowPercentages(!showPercentages)}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all cursor-pointer border ${
+                    showPercentages
+                      ? "bg-amber-500/15 border-amber-500/30 text-amber-300 font-semibold"
+                      : "bg-white/[0.04] border-white/10 text-slate-400 hover:text-white"
+                  }`}
+                >
+                  <Percent className="w-3 h-3 text-amber-400" />
+                  <span>{showPercentages ? "Hide Percentages" : "Show Percentages"}</span>
+                </button>
               </div>
 
               <div className="space-y-2.5">
@@ -371,10 +420,12 @@ export default function App() {
                           <span className="text-[10px] text-slate-500 uppercase block font-medium">Time</span>
                           <span className="font-bold text-white font-mono text-sm">{r.metrics.p50_mins}m</span>
                         </div>
-                        <div>
-                          <span className="text-[10px] text-slate-500 uppercase block font-medium">Reliability</span>
-                          <span className={`font-bold font-mono text-sm ${tier.text}`}>{r.metrics.win_rate}%</span>
-                        </div>
+                        {showPercentages && (
+                          <div>
+                            <span className="text-[10px] text-slate-500 uppercase block font-medium">Reliability</span>
+                            <span className={`font-bold font-mono text-sm ${tier.text}`}>{r.metrics.win_rate}%</span>
+                          </div>
+                        )}
                         <div>
                           <span className="text-[10px] text-slate-500 uppercase block font-medium">Fare</span>
                           <span className="font-bold text-slate-300 font-mono text-sm">€{r.cost.toFixed(2)}</span>
@@ -397,9 +448,11 @@ export default function App() {
                     {activeRouteIdx === 0 && <Trophy className="w-3 h-3 text-emerald-400" />}
                     {activeTier.badge}
                   </span>
-                  <span className={`text-xs font-mono font-bold ${activeTier.text}`}>
-                    {activeRoute.metrics.win_rate}% On-Time Win Rate
-                  </span>
+                  {showPercentages && (
+                    <span className={`text-xs font-mono font-bold ${activeTier.text}`}>
+                      {activeRoute.metrics.win_rate}% On-Time Win Rate
+                    </span>
+                  )}
                 </div>
 
                 <h2 className="text-xl md:text-2xl font-bold text-white tracking-tight">

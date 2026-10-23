@@ -27,6 +27,7 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+LISBON_TZ = ZoneInfo("Europe/Lisbon")
 
 # --- SECURE CONFIGURATION TOKENS ---
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "AIzaSyDyiFzvUe3K7rFAXGi90QX0MQlDibmVThc")
@@ -83,6 +84,7 @@ class SimulationRequest(BaseModel):
     target_time: Optional[str] = None  # ISO8601 String
     time_mode: str = "depart_at"  # "depart_at" or "arrive_by"
     suspended_lines: List[str] = Field(default_factory=list)  # "What If" mode
+    allow_bike: bool = False  # Toggle bike / Gira options (off by default)
 
 
 def clean_line_id(line_id: str) -> str:
@@ -329,8 +331,30 @@ def inject_citibike_alternative(
     }
 
 
+def normalize_lisbon_address(addr: str) -> str:
+    cleaned = str(addr or "").strip()
+    lower = cleaned.lower()
+    if not any(
+        k in lower
+        for k in [
+            "lisboa",
+            "lisbon",
+            "portugal",
+            "cascais",
+            "sintra",
+            "almada",
+            "amadora",
+            "oeiras",
+            "setúbal",
+            "barreiro",
+        ]
+    ):
+        cleaned += ", Lisboa, Portugal"
+    return cleaned
+
+
 def fetch_google_itineraries(
-    origin: str, destination: str, target_time: datetime, time_mode: str
+    origin: str, destination: str, target_time: datetime, time_mode: str, allow_bike: bool = False
 ) -> List[Dict]:
     headers = {
         "Content-Type": "application/json",
@@ -338,9 +362,12 @@ def fetch_google_itineraries(
         "X-Goog-FieldMask": "routes.duration,routes.legs.steps,routes.travelAdvisory",
     }
 
+    norm_origin = normalize_lisbon_address(origin)
+    norm_dest = normalize_lisbon_address(destination)
+
     payload = {
-        "origin": {"address": origin},
-        "destination": {"address": destination},
+        "origin": {"address": norm_origin},
+        "destination": {"address": norm_dest},
         "travelMode": "TRANSIT",
         "computeAlternativeRoutes": True,
     }
@@ -502,17 +529,25 @@ def fetch_google_itineraries(
         r["route_index"] = i + 1
 
     if parsed_deduped:
-        bike_alt = inject_citibike_alternative(parsed_deduped[0], destination)
-        if bike_alt:
-            bike_alt["route_index"] = len(parsed_deduped) + 1
-            parsed_deduped.append(bike_alt)
+        if allow_bike:
+            bike_alt = inject_citibike_alternative(parsed_deduped[0], destination)
+            if bike_alt:
+                bike_alt["route_index"] = len(parsed_deduped) + 1
+                parsed_deduped.append(bike_alt)
+        else:
+            parsed_deduped = [
+                r for r in parsed_deduped
+                if not any(s.get("mode") == "CITIBIKE" for s in r["itinerary"])
+            ]
+            for i, r in enumerate(parsed_deduped):
+                r["route_index"] = i + 1
         return parsed_deduped
 
     logger.warning("No routes from Google API; providing Lisbon fallback itineraries.")
-    return create_fallback_lisbon_itineraries(origin, destination, target_time)
+    return create_fallback_lisbon_itineraries(origin, destination, target_time, allow_bike=allow_bike)
 
 
-def create_fallback_lisbon_itineraries(origin: str, destination: str, target_time: datetime) -> List[Dict]:
+def create_fallback_lisbon_itineraries(origin: str, destination: str, target_time: datetime, allow_bike: bool = True) -> List[Dict]:
     """Fallback generator for Lisbon routes if external API returns no transit results."""
     r1 = {
         "route_index": 1,
@@ -673,43 +708,17 @@ def create_fallback_lisbon_itineraries(origin: str, destination: str, target_tim
     }
 
     routes = [r1, r2, r3]
-    bike_alt = inject_citibike_alternative(r1, destination)
-    if bike_alt:
-        bike_alt["route_index"] = 4
-        routes.append(bike_alt)
+    if allow_bike:
+        bike_alt = inject_citibike_alternative(r1, destination)
+        if bike_alt:
+            bike_alt["route_index"] = 4
+            routes.append(bike_alt)
     return routes
 
 
 def build_live_arrival_cache(itineraries: List[Dict]) -> Dict[tuple, List[float]]:
-    arrival_cache = {}
-    for route in itineraries:
-        transit_leg_count = 0
-        for step_idx, step in enumerate(route["itinerary"]):
-            if step["mode"] != "TRANSIT":
-                continue
-            transit_leg_count += 1
-            dep_stop_name = step.get("departure_stop", "")
-            arr_stop_name = step.get("arrival_stop", "")
-            line_id = clean_line_id(step.get("line_id", ""))
-            lines = [line_id]
-
-            if transit_leg_count > 1:
-                lines = (
-                    find_alternatives(line_id, dep_stop_name, arr_stop_name) or lines
-                )
-
-            arrivals = []
-            for candidate_line in lines:
-                dep_id = rt_engine.find_stop_id_by_name(dep_stop_name, candidate_line)
-                arr_id = rt_engine.find_stop_id_by_name(arr_stop_name, candidate_line)
-                direction = rt_engine.get_direction(dep_id, arr_id)
-                arrivals.extend(
-                    rt_engine.fetch_live_arrivals(candidate_line, dep_id, direction)
-                )
-
-            arrival_cache[(route["route_index"], step_idx)] = sorted(set(arrivals))
-
-    return arrival_cache
+    # Lisbon GTFS-RT is simulated via stochastic headways
+    return {}
 
 
 def next_cached_arrival(arrivals: List[float], current_unix: float) -> Optional[float]:
@@ -870,22 +879,12 @@ def run_competitive_simulation(
                     line_id = clean_line_id(step.get("line_id", ""))
 
                     next_gtfs_arrival = None
-                    if transit_leg_count == 1 and live_arrival_cache is not None:
+                    if transit_leg_count == 1 and live_arrival_cache:
                         next_gtfs_arrival = next_cached_arrival(
                             live_arrival_cache.get(
                                 (route["route_index"], step_idx), []
                             ),
                             current_unix,
-                        )
-                    elif transit_leg_count == 1:
-                        dep_id = rt_engine.find_stop_id_by_name(dep_stop_name, line_id)
-                        arr_id = rt_engine.find_stop_id_by_name(arr_stop_name, line_id)
-                        direction = rt_engine.get_direction(dep_id, arr_id)
-                        gtfs_arrivals = rt_engine.fetch_live_arrivals(
-                            line_id, dep_id, direction
-                        )
-                        next_gtfs_arrival = next_cached_arrival(
-                            gtfs_arrivals, current_unix
                         )
 
                     lisbon_hour = get_lisbon_hour(virtual_clock)
@@ -977,8 +976,11 @@ def run_competitive_simulation(
         win_counts[winner] += 1
 
     results = {}
-    est_offset = timedelta(hours=-4)
-    local_start_time = sim_start_time + est_offset
+    local_start_time = (
+        sim_start_time.astimezone(LISBON_TZ)
+        if sim_start_time.tzinfo
+        else sim_start_time.replace(tzinfo=timezone.utc).astimezone(LISBON_TZ)
+    )
 
     for r in itineraries:
         route_index = r["route_index"]
@@ -993,7 +995,11 @@ def run_competitive_simulation(
 
         # Handling Arrive By Reverse Calculation
         if time_mode == "arrive_by" and target_arrival_time:
-            local_target_arr = target_arrival_time + est_offset
+            local_target_arr = (
+                target_arrival_time.astimezone(LISBON_TZ)
+                if target_arrival_time.tzinfo
+                else target_arrival_time.replace(tzinfo=timezone.utc).astimezone(LISBON_TZ)
+            )
             # Subtract P90 to find required departure
             dt_req_departure = local_target_arr - timedelta(minutes=p90_time)
             dt_est_arr = local_target_arr
@@ -1017,16 +1023,11 @@ def run_competitive_simulation(
                 shift_offset_secs = (
                     dt_req_departure - local_start_time
                 ).total_seconds()
-                dt_board = (
-                    datetime.fromtimestamp(
-                        avg_board + shift_offset_secs, tz=timezone.utc
-                    )
-                    + est_offset
+                dt_board = datetime.fromtimestamp(
+                    avg_board + shift_offset_secs, tz=LISBON_TZ
                 )
             else:
-                dt_board = (
-                    datetime.fromtimestamp(avg_board, tz=timezone.utc) + est_offset
-                )
+                dt_board = datetime.fromtimestamp(avg_board, tz=LISBON_TZ)
 
             step_metrics[step_idx] = {
                 "board_time": dt_board.strftime("%I:%M %p"),
@@ -1067,13 +1068,17 @@ def run_simulation(req: SimulationRequest):
         else:
             target_dt = datetime.now(timezone.utc)
 
-        est_offset = timedelta(hours=-4)
-        local_target_str = (target_dt + est_offset).strftime("%A, %B %d %Y at %I:%M %p")
+        local_target_dt = (
+            target_dt.astimezone(LISBON_TZ)
+            if target_dt.tzinfo
+            else target_dt.replace(tzinfo=timezone.utc).astimezone(LISBON_TZ)
+        )
+        local_target_str = local_target_dt.strftime("%A, %B %d %Y at %I:%M %p")
 
         # In Arrive By mode, Google gives us an itinerary where the start time is calculated backwards.
         # We extract that start time from the first step and run our forward Monte Carlo from there.
         itineraries = fetch_google_itineraries(
-            req.origin, req.destination, target_dt, req.time_mode
+            req.origin, req.destination, target_dt, req.time_mode, req.allow_bike
         )
         if not itineraries:
             raise HTTPException(status_code=400, detail="No routes found")
