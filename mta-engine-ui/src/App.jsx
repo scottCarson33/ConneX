@@ -93,7 +93,7 @@ export default function App() {
 
   const getRankTier = (route, index) => {
     // Quality tiers are strictly based on absolute score, so adding bikes or other options never lowers tiers
-    const score = route?.metrics?.score ?? route?.metrics?.reliability_score ?? 100;
+    const score = Math.min(96, route?.metrics?.score ?? route?.metrics?.reliability_score ?? 75);
     const isWinner = index === 0;
 
     if (score >= 85) {

@@ -501,9 +501,17 @@ def fetch_google_itineraries(
 
                 line_id = t_line.get("nameShort")
                 line_name = t_line.get("name", "")
-                is_bus = v_type == "BUS"
+                clean_lid = str(line_id or line_name or "").upper().strip()
+                is_metro = clean_lid in [
+                    "AZUL", "BLUE", "AMARELA", "YELLOW", "VERDE", "GREEN", "VERMELHA", "RED"
+                ] or any(
+                    m in line_name.upper()
+                    for m in ["METRO", "LINHA AZUL", "LINHA AMARELA", "LINHA VERDE", "LINHA VERMELHA"]
+                )
                 is_ferry = v_type == "FERRY" or mode == "FERRY"
-                is_commuter_rail = v_type == "COMMUTER_TRAIN" or any(
+                is_commuter_rail = v_type in [
+                    "COMMUTER_TRAIN", "HEAVY_RAIL", "HIGH_SPEED_TRAIN", "LONG_DISTANCE_TRAIN"
+                ] or any(
                     rn in line_name.upper()
                     for rn in [
                         "CP",
@@ -514,6 +522,18 @@ def fetch_google_itineraries(
                         "FERTAGUS",
                         "SADO",
                     ]
+                )
+                is_bus = (
+                    v_type in ["BUS", "INTERCITY_BUS", "TROLLEYBUS", "TRAM"]
+                    or (
+                        not is_metro
+                        and not is_ferry
+                        and not is_commuter_rail
+                        and any(
+                            clean_lid.startswith(d)
+                            for d in ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
+                        )
+                    )
                 )
 
                 dep_stop = stop_details.get("departureStop", {}).get(
@@ -807,6 +827,9 @@ def run_competitive_simulation(
     delayed_transfers = {r["route_index"]: 0 for r in itineraries}
     early_arrivals = {r["route_index"]: 0 for r in itineraries}
     on_time_arrivals = {r["route_index"]: 0 for r in itineraries}
+    late_trials = {r["route_index"]: 0 for r in itineraries}
+    missing_bus_trials = {r["route_index"]: 0 for r in itineraries}
+    trial_delay_pcts = {r["route_index"]: [] for r in itineraries}
 
     all_durations = {r["route_index"]: [] for r in itineraries}
     step_stats = {
@@ -816,18 +839,48 @@ def run_competitive_simulation(
         for r in itineraries
     }
 
-    TRANSFER_DELAY_TOLERANCE_MINS = 2.0
+    TRANSFER_DELAY_TOLERANCE_MINS = 1.5
+    BUS_DEFAULT_DROP = 12.0  # Base reliability drop (%) for routes using buses
+    BUS_EXTRA_LEG_DROP = 5.0  # Additional drop (%) per extra bus leg
+    TRANSFER_PENALTY_PER_LEG = 9.0  # Base reliability penalty (%) per transfer
+    BASE_MISSING_BUS_PROB = 0.10  # 10% base probability a bus is missing/bunched
+    MAX_SIM_RELIABILITY = 95.0  # 100% reliability is never an option in simulation
+    MIN_SIM_RELIABILITY = 12.0
 
-    # Planned total trip durations from simulation start time
+    # Planned total trip durations from simulation start time (without double-counting walk legs)
     planned_durations = {}
     for route in itineraries:
-        planned_initial_wait = 0.0
-        for step in route["itinerary"]:
-            if step.get("mode") == "TRANSIT" and step.get("scheduled_departure"):
-                sched_unix = step["scheduled_departure"].timestamp()
-                planned_initial_wait = max(0.0, (sched_unix - sim_start_time.timestamp()) / 60.0)
-                break
-        planned_durations[route["route_index"]] = route["baseline_mins"] + planned_initial_wait
+        planned_clock = sim_start_time
+        for step_idx, step in enumerate(route["itinerary"]):
+            s_mode = step.get("mode")
+            s_base = step.get("baseline_duration", 0.0)
+            if s_mode == "WALK":
+                if 0 < step_idx < len(route["itinerary"]) - 1:
+                    prev_s = route["itinerary"][step_idx - 1]
+                    next_s = route["itinerary"][step_idx + 1]
+                    if prev_s.get("mode") == "TRANSIT" and next_s.get("mode") == "TRANSIT":
+                        override = get_transfer_walk_time(
+                            clean_line_id(prev_s.get("line_id", "")),
+                            clean_line_id(next_s.get("line_id", "")),
+                            next_s.get("departure_stop", ""),
+                        )
+                        if override is not None:
+                            s_base = override
+                planned_clock += timedelta(minutes=s_base)
+            elif s_mode in ["CITIBIKE", "DOCKING_OVERHEAD"]:
+                planned_clock += timedelta(minutes=s_base)
+            elif s_mode == "TRANSIT":
+                if step.get("scheduled_departure"):
+                    sched_dt = step["scheduled_departure"]
+                    wait_m = max(
+                        0.0, (sched_dt.timestamp() - planned_clock.timestamp()) / 60.0
+                    )
+                else:
+                    wait_m = 2.5 if step.get("is_bus") else 2.0
+                planned_clock += timedelta(minutes=(wait_m + s_base))
+
+        calc_planned = (planned_clock.timestamp() - sim_start_time.timestamp()) / 60.0
+        planned_durations[route["route_index"]] = max(1.0, calc_planned, route["baseline_mins"])
 
     # Fetch live weather conditions
     weather = fetch_weather_conditions()
@@ -840,7 +893,7 @@ def run_competitive_simulation(
         trial_line_delays = {}
         trial_hub_shocks = {}
 
-        def get_trial_line_schedule(line, tod):
+        def get_trial_line_schedule(line, tod, is_bus_line=False):
             if line not in trial_line_offsets:
                 h = get_headway(line, tod)
                 if h is None:
@@ -849,12 +902,16 @@ def run_competitive_simulation(
                     return (0.0, 9999.0, 9999.0)
                 trial_line_offsets[line] = random.uniform(0, h)
                 data = live_telemetry.get(line, {"delay": 0.0, "has_alert": False})
-                
-                # Base delay: alert causes heavy tail; normal operations maintain high reliability (>= 7/10)
+
+                # Stochastic line delay: buses suffer street traffic; metro/rail have right-of-way variance
                 if data["has_alert"]:
                     base_delay = np.random.lognormal(2.0, 0.8) * weather_delay_mult
+                elif is_bus_line:
+                    base_delay = np.random.gamma(1.5, 1.0) * weather_delay_mult
                 else:
-                    base_delay = max(0.0, np.random.normal(0.4, 0.4)) * weather_delay_mult
+                    base_delay = np.random.exponential(0.45) * weather_delay_mult
+                    if random.random() < 0.06:
+                        base_delay += np.random.gamma(2.0, 1.1) * weather_delay_mult
 
                 # Correlated delays (System Shocks)
                 hub_delay = 0.0
@@ -869,12 +926,16 @@ def run_competitive_simulation(
                     "oriente": ["VERMELHA"],  # Metro + CP + Bus hub
                     "sete rios": ["AZUL"],  # Metro + CP + Bus terminal
                 }
-                
+
                 for hub, lines in hubs.items():
                     if line in lines:
                         if hub not in trial_hub_shocks:
-                            # 1% chance of minor congestion per hub per trial
-                            trial_hub_shocks[hub] = np.random.lognormal(1.5, 0.5) if random.random() < 0.01 else 0.0
+                            # 3% chance of congestion shock per hub per trial
+                            trial_hub_shocks[hub] = (
+                                np.random.lognormal(1.2, 0.5)
+                                if random.random() < 0.03
+                                else 0.0
+                            )
                         hub_delay = max(hub_delay, trial_hub_shocks[hub])
 
                 # Shared track correlation (express/local on same tracks)
@@ -883,15 +944,21 @@ def run_competitive_simulation(
                     "cascais_line": ["CP_CASCAIS"],
                     "metro_blue_green": ["AZUL", "VERDE"],  # Share Baixa-Chiado
                 }
-                
+
                 track_delay = 0.0
                 for track_group, track_lines in shared_tracks.items():
                     if line in track_lines:
                         if track_group not in trial_hub_shocks:
-                            trial_hub_shocks[track_group] = np.random.lognormal(2.0, 0.6) if random.random() < 0.03 else 0.0
+                            trial_hub_shocks[track_group] = (
+                                np.random.lognormal(1.4, 0.6)
+                                if random.random() < 0.03
+                                else 0.0
+                            )
                         track_delay = max(track_delay, trial_hub_shocks[track_group])
 
-                trial_line_delays[line] = data["delay"] + base_delay + hub_delay + track_delay
+                trial_line_delays[line] = (
+                    data["delay"] + base_delay + hub_delay + track_delay
+                )
             h_second = get_headway(line, tod)
             if h_second is None:
                 return (0.0, 9999.0, 9999.0)
@@ -905,6 +972,7 @@ def run_competitive_simulation(
             virtual_clock = sim_start_time
             sim_time = 0.0
             delayed_transfer_this_trial = False
+            missing_bus_this_trial = False
             transit_leg_count = 0
 
             for step_idx, step in enumerate(route["itinerary"]):
@@ -918,28 +986,42 @@ def run_competitive_simulation(
                     if step_idx > 0 and step_idx < len(route["itinerary"]) - 1:
                         prev_step = route["itinerary"][step_idx - 1]
                         next_step = route["itinerary"][step_idx + 1]
-                        if prev_step.get("mode") == "TRANSIT" and next_step.get("mode") == "TRANSIT":
+                        if (
+                            prev_step.get("mode") == "TRANSIT"
+                            and next_step.get("mode") == "TRANSIT"
+                        ):
                             from_line = clean_line_id(prev_step.get("line_id", ""))
                             to_line = clean_line_id(next_step.get("line_id", ""))
                             station = next_step.get("departure_stop", "")
-                            override = get_transfer_walk_time(from_line, to_line, station)
+                            override = get_transfer_walk_time(
+                                from_line, to_line, station
+                            )
                             if override is not None:
                                 walk_base = override
-                    leg_duration = walk_base * random.uniform(0.92, 1.12) * weather_walk_mult
+                    leg_duration = (
+                        walk_base * random.uniform(0.95, 1.07) * weather_walk_mult
+                    )
                     step_stats[route["route_index"]][step_idx]["board_unix"].append(
                         current_unix
                     )
                     step_stats[route["route_index"]][step_idx]["wait_mins"].append(0.0)
 
                 elif mode == "CITIBIKE":
-                    leg_duration = base * random.uniform(0.85, 1.20)
+                    # Street cycling variance + 10% chance of dock availability search delay
+                    dock_search_delay = (
+                        random.uniform(2.5, 6.0) if random.random() < 0.10 else 0.0
+                    )
+                    leg_duration = (
+                        base * random.uniform(0.94, 1.22) * weather_walk_mult
+                        + dock_search_delay
+                    )
                     step_stats[route["route_index"]][step_idx]["board_unix"].append(
                         current_unix
                     )
                     step_stats[route["route_index"]][step_idx]["wait_mins"].append(0.0)
 
                 elif mode == "DOCKING_OVERHEAD":
-                    leg_duration = base * random.uniform(0.75, 1.50)
+                    leg_duration = base * random.uniform(0.85, 1.35)
                     step_stats[route["route_index"]][step_idx]["board_unix"].append(
                         current_unix
                     )
@@ -975,63 +1057,133 @@ def run_competitive_simulation(
 
                     is_bus = step.get("is_bus", False)
                     is_commuter_rail = step.get("is_commuter_rail", False)
-                    offset, mc_delay, headway = get_trial_line_schedule(line_id, tod)
-                    line_data = live_telemetry.get(line_id, {"delay": 0.0, "has_alert": False})
+                    offset, mc_delay, headway = get_trial_line_schedule(
+                        line_id, tod, is_bus_line=is_bus
+                    )
+                    line_data = live_telemetry.get(
+                        line_id, {"delay": 0.0, "has_alert": False}
+                    )
+
+                    # Simulate missing / cancelled / bunched bus ("ghost bus")
+                    extra_missing_wait = 0.0
+                    if is_bus:
+                        missing_prob = BASE_MISSING_BUS_PROB * weather_delay_mult
+                        if tod == "peak":
+                            missing_prob *= 1.25
+                        if line_data.get("has_alert"):
+                            missing_prob += 0.12
+                        if random.random() < min(0.45, missing_prob):
+                            missing_bus_this_trial = True
+                            extra_missing_wait = headway * random.uniform(0.75, 1.25)
+                    else:
+                        # Small probability (2%) of a held/skipped train
+                        if random.random() < (0.02 * weather_delay_mult):
+                            extra_missing_wait = headway * random.uniform(0.50, 0.90)
 
                     if next_gtfs_arrival:
-                        wait_time_mins = max(0.0, (next_gtfs_arrival - current_unix) / 60.0)
-                        ride_delay = mc_delay if line_data.get("has_alert") else 0.0
+                        wait_time_mins = (
+                            max(0.0, (next_gtfs_arrival - current_unix) / 60.0)
+                            + extra_missing_wait
+                        )
+                        ride_delay = mc_delay * (0.65 if is_bus else 0.45)
                     elif step.get("scheduled_departure"):
                         sched_unix = step["scheduled_departure"].timestamp()
                         time_diff = (sched_unix - current_unix) / 60.0
-                        jitter = np.random.normal(0.3, 0.5) if is_bus else np.random.normal(0.1, 0.3)
+                        jitter = (
+                            np.random.normal(0.5, 0.9) + (mc_delay * 0.40)
+                            if is_bus
+                            else np.random.normal(0.1, 0.35) + (mc_delay * 0.25)
+                        )
                         if transit_leg_count == 1:
-                            wait_time_mins = max(0.0, time_diff + jitter)
+                            wait_time_mins = (
+                                max(0.0, time_diff + jitter) + extra_missing_wait
+                            )
                         else:
-                            if current_unix <= sched_unix + 30.0:
-                                wait_time_mins = max(0.0, time_diff + jitter)
+                            # Transfer leg: check if incoming delay caused a missed connection
+                            conn_grace_secs = 25.0  # 25s grace before connection doors close
+                            conn_dep_unix = sched_unix + (
+                                max(-0.4, np.random.normal(0.05, 0.30)) * 60.0
+                            )
+                            if current_unix <= conn_dep_unix + conn_grace_secs:
+                                wait_time_mins = (
+                                    max(
+                                        0.5,
+                                        (conn_dep_unix - current_unix) / 60.0
+                                        + max(0.0, jitter * 0.4),
+                                    )
+                                    + extra_missing_wait
+                                )
                             else:
                                 delayed_transfer_this_trial = True
-                                wait_time_mins = headway - (((current_unix - sched_unix) / 60.0) % headway) + max(0.0, jitter)
-                        ride_delay = mc_delay if line_data.get("has_alert") else 0.0
+                                missed_by_mins = (
+                                    current_unix - conn_dep_unix
+                                ) / 60.0
+                                wait_time_mins = (
+                                    (headway - (missed_by_mins % headway))
+                                    + max(0.0, jitter * 0.4)
+                                    + extra_missing_wait
+                                )
+                        ride_delay = mc_delay * (0.55 if is_bus else 0.35)
                     else:
-                        wait_time_mins = random.uniform(0.5, min(headway, 6.0 if is_bus else 5.0))
-                        ride_delay = mc_delay if line_data.get("has_alert") else 0.0
+                        base_wait = random.uniform(
+                            0.8, min(headway, 7.5 if is_bus else 5.5)
+                        )
+                        if transit_leg_count > 1:
+                            transfer_friction = random.uniform(0.5, 1.5)
+                            base_wait += transfer_friction
+                            if base_wait > (headway * 0.65) or extra_missing_wait > 0:
+                                delayed_transfer_this_trial = True
+                        wait_time_mins = (
+                            base_wait + (mc_delay * 0.35) + extra_missing_wait
+                        )
+                        ride_delay = mc_delay * (0.60 if is_bus else 0.40)
 
                     if wait_time_mins < 0:
                         wait_time_mins = 0
 
-                    if transit_leg_count > 1 and step.get("scheduled_departure"):
-                        sched_unix = step["scheduled_departure"].timestamp()
-                        boarded_unix = current_unix + (wait_time_mins * 60.0)
-                        delay_mins = (boarded_unix - sched_unix) / 60.0
-                        if delay_mins > TRANSFER_DELAY_TOLERANCE_MINS:
+                    if transit_leg_count > 1:
+                        if step.get("scheduled_departure"):
+                            sched_unix = step["scheduled_departure"].timestamp()
+                            boarded_unix = current_unix + (wait_time_mins * 60.0)
+                            delay_mins = (boarded_unix - sched_unix) / 60.0
+                            if delay_mins > TRANSFER_DELAY_TOLERANCE_MINS:
+                                delayed_transfer_this_trial = True
+                        elif wait_time_mins > 4.0:
                             delayed_transfer_this_trial = True
 
                     # Widen ride time variance using micro-simulation per stop
                     stop_count = max(1, step.get("stop_count", 1))
                     avg_segment_time = base / stop_count
                     micro_ride_time = 0.0
-                    
+
                     if is_bus:
-                        # Carris Bus modeling: smooth street flow with minor traffic variation (NYC tunnel blockage removed)
+                        # Carris Bus / surface tram modeling: mixed street traffic, signals, and boarding queues
                         for _ in range(stop_count):
-                            micro_ride_time += avg_segment_time * np.random.normal(1.0, 0.035)
-                            # 1.5% chance per stop of light traffic signal queue (15s)
+                            micro_ride_time += (
+                                avg_segment_time
+                                * np.random.normal(1.03, 0.07)
+                                * weather_delay_mult
+                            )
+                            # 6% chance per stop of traffic signal / intersection queue
+                            if random.random() < 0.06:
+                                micro_ride_time += np.random.exponential(0.45)
+                            # 1.5% chance per stop of street congestion / double-parking hold
                             if random.random() < 0.015:
-                                micro_ride_time += np.random.exponential(0.25)
+                                micro_ride_time += np.random.gamma(2.0, 0.7)
                     else:
-                        # Metro & CP suburban rail: dedicated right-of-way
+                        # Metro & CP suburban rail: dedicated right-of-way with realistic dwell/signal variance
                         for _ in range(stop_count):
-                            micro_ride_time += avg_segment_time * np.random.normal(1.0, 0.015)
-                            # 1.0% chance of passenger boarding hold (20s)
-                            if random.random() < 0.01:
-                                micro_ride_time += np.random.exponential(0.3)
-                            # Rare signal regulation (0.2% chance of 45s)
-                            if random.random() < 0.002:
-                                micro_ride_time += np.random.exponential(0.75)
-                    
-                    ride_time = micro_ride_time + ride_delay
+                            micro_ride_time += avg_segment_time * np.random.normal(
+                                1.01, 0.025
+                            )
+                            # 2.5% chance of passenger boarding hold
+                            if random.random() < 0.025:
+                                micro_ride_time += np.random.exponential(0.35)
+                            # 0.5% chance of signal regulation hold
+                            if random.random() < 0.005:
+                                micro_ride_time += np.random.exponential(0.85)
+
+                    ride_time = max(base * 0.85, micro_ride_time) + ride_delay
                     leg_duration = wait_time_mins + ride_time
 
                     board_unix = current_unix + (wait_time_mins * 60.0)
@@ -1047,25 +1199,35 @@ def run_competitive_simulation(
 
             if delayed_transfer_this_trial:
                 delayed_transfers[route["route_index"]] += 1
+            if missing_bus_this_trial:
+                missing_bus_trials[route["route_index"]] += 1
+
             trial_durations[route["route_index"]] = sim_time
             all_durations[route["route_index"]].append(sim_time)
-            
+
             planned_total = planned_durations.get(
-                route["route_index"], route["baseline_mins"]
+                route["route_index"], max(1.0, route["baseline_mins"])
             )
 
-            # Percentage-based severe risk (1.5x planned total)
-            if sim_time > (planned_total * 1.5):
+            delay_over_planned = max(0.0, sim_time - planned_total)
+            delay_pct = (delay_over_planned / planned_total) * 100.0
+            trial_delay_pcts[route["route_index"]].append(delay_pct)
+
+            # Percentage-based severe risk (>35% over planned total or >10 mins late)
+            if sim_time > (planned_total * 1.35) or delay_over_planned > 10.0:
                 severe_delays[route["route_index"]] += 1
-            
+
+            # Grace window for on-time vs late (x% late threshold: >12% or >2.5 mins over planned schedule)
+            grace_mins = max(2.5, planned_total * 0.12)
+            if delay_pct > 12.0 and delay_over_planned > 2.5:
+                late_trials[route["route_index"]] += 1
+
             # Early arrival (beats planned schedule)
             if sim_time < (planned_total - 2.0):
                 early_arrivals[route["route_index"]] += 1
 
-            # On-time arrival criteria: arrived within planned schedule + grace window
-            # Standard transit on-time threshold: allows reasonable grace window (e.g. 4-5 mins)
-            grace_mins = max(3.5, planned_total * 0.15)
-            if (sim_time - planned_total) <= grace_mins:
+            # On-time arrival criteria: arrived within grace window and no missing bus
+            if delay_over_planned <= grace_mins and not missing_bus_this_trial:
                 on_time_arrivals[route["route_index"]] += 1
 
         winner = min(trial_durations, key=trial_durations.get)
@@ -1131,18 +1293,72 @@ def run_competitive_simulation(
             }
 
         # Absolute Route Reliability & Quality Score
-        # Computed independently per route: adding alternative routes (like bike) does NOT lower other route scores
+        # Computed from Monte Carlo simulation + bus default drop, transfer penalty, % late delay, and % missing bus
         on_time_pct = (on_time_arrivals[route_index] / num_trials) * 100.0
         severe_pct = (severe_delays[route_index] / num_trials) * 100.0
         transfer_delay_pct = (delayed_transfers[route_index] / num_trials) * 100.0
+        late_pct = (late_trials[route_index] / num_trials) * 100.0
+        missing_bus_pct = (missing_bus_trials[route_index] / num_trials) * 100.0
+        avg_late_pct = (
+            float(np.mean(trial_delay_pcts[route_index]))
+            if trial_delay_pcts[route_index]
+            else 0.0
+        )
 
-        abs_score = max(0.0, min(100.0, on_time_pct - (severe_pct * 1.5) - (transfer_delay_pct * 0.15)))
+        transit_steps = [
+            s for s in r["itinerary"] if s.get("mode") == "TRANSIT"
+        ]
+        has_bike = any(s.get("mode") == "CITIBIKE" for s in r["itinerary"])
+        num_bus_legs = sum(1 for s in transit_steps if s.get("is_bus"))
+        num_transfers = max(0, len(transit_steps) - 1)
+
+        # 1. Default bus drop: surface buses in mixed traffic have an inherent default reliability drop
+        bus_penalty = (
+            BUS_DEFAULT_DROP + BUS_EXTRA_LEG_DROP * (num_bus_legs - 1)
+            if num_bus_legs > 0
+            else (6.0 if has_bike else 0.0)
+        )
+
+        # 2. Transfer penalty: each transfer introduces connection risk plus simulated transfer delay rate
+        transfer_penalty = (num_transfers * TRANSFER_PENALTY_PER_LEG) + (
+            transfer_delay_pct * 0.22
+        )
+
+        # 3. Late delay penalty (if delay is x% late across trials) & Missing bus penalty (x% chance bus is missing)
+        late_penalty = (
+            (late_pct * 0.35) + (avg_late_pct * 0.25) + (severe_pct * 0.50)
+        )
+        missing_bus_penalty = missing_bus_pct * 0.50
+
+        # Base simulation ceiling (< 100% since stochastic simulation never guarantees 100% reliability)
+        planned_ref = planned_durations.get(route_index, max(10.0, r["baseline_mins"]))
+        sim_variance_drop = min(3.5, (iqr_time / max(10.0, planned_ref)) * 10.0)
+        raw_reliability = (
+            MAX_SIM_RELIABILITY
+            - sim_variance_drop
+            - bus_penalty
+            - transfer_penalty
+            - late_penalty
+            - missing_bus_penalty
+        )
+
+        # Simulation cap: 100% reliability is never an option in a stochastic transit simulation
+        abs_score = max(
+            MIN_SIM_RELIABILITY,
+            min(MAX_SIM_RELIABILITY, raw_reliability),
+        )
 
         results[route_index] = {
             "score": round(abs_score, 1),
-            "reliability_score": round(on_time_pct, 1),
+            "reliability_score": round(abs_score, 1),
+            "on_time_rate": round(on_time_pct, 1),
             "win_rate": round((win_counts[r["route_index"]] / num_trials) * 100, 1),
             "severe_risk": round(severe_pct, 1),
+            "late_prob": round(late_pct, 1),
+            "avg_late_pct": round(avg_late_pct, 1),
+            "missing_bus_prob": round(missing_bus_pct, 1),
+            "bus_penalty": round(bus_penalty, 1),
+            "transfer_penalty": round(transfer_penalty, 1),
             "early_prob": round((early_arrivals[route_index] / num_trials) * 100, 1),
             "transfer_delay_prob": round(transfer_delay_pct, 1),
             "exp_time": round(mean_time, 1),
