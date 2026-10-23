@@ -15,8 +15,10 @@ import {
   CheckCircle2,
   Percent,
 } from "lucide-react";
+import CarrisMobileApp from "./CarrisMobileApp";
 
 export default function App() {
+  const [viewMode, setViewMode] = useState("carris");
   const [origin, setOrigin] = useState("Praça do Comércio");
   const [destination, setDestination] = useState("Belém, Lisboa");
   const [timeMode, setTimeMode] = useState("depart_at");
@@ -189,6 +191,10 @@ export default function App() {
     return merged;
   }, [activeRoute]);
 
+  if (viewMode === "carris") {
+    return <CarrisMobileApp onSwitchToClassic={() => setViewMode("classic")} />;
+  }
+
   return (
     <div className="min-h-screen bg-[#0a0a0c] text-slate-100 font-sans antialiased selection:bg-amber-500/30">
       <div className="fixed inset-0 bg-gradient-to-b from-[#111116] via-[#0a0a0c] to-[#0a0a0c] pointer-events-none" />
@@ -196,14 +202,23 @@ export default function App() {
       <main className="relative z-10 max-w-2xl mx-auto px-4 py-8 md:py-12">
         {/* Simple Header */}
         <header className="text-center mb-8">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/[0.04] border border-white/[0.08] text-xs text-slate-400 mb-3">
-            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-            <span>Lisbon Transit Intelligence</span>
-            {weatherData && (
-              <span className="text-slate-500 ml-1">
-                • {weatherData.description} {weatherData.temp_c ? `(${weatherData.temp_c}°C)` : ""}
-              </span>
-            )}
+          <div className="flex items-center justify-center gap-2 mb-3">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/[0.04] border border-white/[0.08] text-xs text-slate-400">
+              <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+              <span>Lisbon Transit Intelligence</span>
+              {weatherData && (
+                <span className="text-slate-500 ml-1">
+                  • {weatherData.description} {weatherData.temp_c ? `(${weatherData.temp_c}°C)` : ""}
+                </span>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setViewMode("carris")}
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#FFD400] text-[#1D1D1B] font-extrabold text-xs hover:brightness-95 transition-all cursor-pointer shadow-sm"
+            >
+              <span>🚌 Abrir App CARRISway</span>
+            </button>
           </div>
           <h1 className="text-3xl md:text-4xl font-bold tracking-tight text-white">
             Find the Best Route
