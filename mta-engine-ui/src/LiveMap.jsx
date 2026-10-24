@@ -5,8 +5,7 @@ import "leaflet/dist/leaflet.css";
 // Lisbon city centre
 const LISBON_CENTER = [38.7223, -9.1393];
 
-// Approximate coordinates for common Lisbon stops/stations (used when the backend
-// has no polyline geometry, e.g. when running on fallback routes).
+// Approximate coordinates for common Lisbon stops/stations
 const KNOWN_PLACES = {
   "baixa-chiado": [38.7106, -9.1394],
   "cais do sodre": [38.706, -9.1446],
@@ -77,10 +76,14 @@ async function geocode(name, signal) {
 // Decode a Google encoded polyline string into [[lat, lng], ...]
 function decodePolyline(str) {
   if (!str) return [];
-  let index = 0, lat = 0, lng = 0;
+  let index = 0,
+    lat = 0,
+    lng = 0;
   const points = [];
   while (index < str.length) {
-    let b, shift = 0, result = 0;
+    let b,
+      shift = 0,
+      result = 0;
     do {
       b = str.charCodeAt(index++) - 63;
       result |= (b & 0x1f) << shift;
@@ -100,53 +103,75 @@ function decodePolyline(str) {
   return points;
 }
 
-function stepStyle(step, getLineColor) {
+// Clean monochrome route styling so the map stays minimal and distraction-free
+function stepStyle(step) {
   if (step.mode === "WALK") {
-    return { color: "#585862", weight: 4, dashArray: "4 8", opacity: 0.9 };
+    return { color: "#6B6B66", weight: 3.5, dashArray: "4 7", opacity: 0.85 };
   }
   if (step.mode === "CITIBIKE") {
-    return { color: "#1A7F46", weight: 6, opacity: 0.95 };
+    return { color: "#3F3F3C", weight: 5, dashArray: "8 5", opacity: 0.9 };
   }
-  const code = String(step.line_id || step.line_display || "")
-    .replace(/\s*(Bus|Train|Rail|Ferry)\s*/gi, "")
-    .trim();
-  return { color: getLineColor(code).bg, weight: 6, opacity: 0.95 };
+  return { color: "#1D1D1B", weight: 5, opacity: 0.92 };
 }
 
-function circleIcon(fill, stroke) {
+function endpointIcon(label, isDest) {
+  const bg = isDest ? "#1D1D1B" : "#FFFFFF";
+  const fg = isDest ? "#FFFFFF" : "#1D1D1B";
   return L.divIcon({
-    className: "",
-    html: `<div style="width:16px;height:16px;border-radius:50%;background:${fill};border:3px solid ${stroke};box-shadow:0 1px 4px rgba(0,0,0,.35)"></div>`,
-    iconSize: [16, 16],
-    iconAnchor: [8, 8],
+    className: "notranslate",
+    html: `<div translate="no" style="width:20px;height:20px;border-radius:50%;background:${bg};color:${fg};border:2px solid #1D1D1B;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;font-family:Roboto,Arial,sans-serif;box-shadow:0 1px 4px rgba(0,0,0,.22)">${label}</div>`,
+    iconSize: [20, 20],
+    iconAnchor: [10, 10],
   });
 }
 
-export default function LiveMap({ origin, destination, route, getLineColor, height = 260 }) {
-  const containerRef = useRef(null);
+export default function LiveMap({ origin, destination, route, height = 220 }) {
+  const wrapperRef = useRef(null);
   const mapRef = useRef(null);
   const layerRef = useRef(null);
 
-  // Initialise the map once
+  // Initialise the map once inside an imperatively created child div so React never collides with Leaflet DOM nodes
   useEffect(() => {
-    if (!containerRef.current || mapRef.current) return;
-    const map = L.map(containerRef.current, {
+    const wrapper = wrapperRef.current;
+    if (!wrapper || mapRef.current) return;
+
+    const mapEl = document.createElement("div");
+    mapEl.style.width = "100%";
+    mapEl.style.height = "100%";
+    wrapper.innerHTML = "";
+    wrapper.appendChild(mapEl);
+
+    const map = L.map(mapEl, {
       center: LISBON_CENTER,
       zoom: 13,
       zoomControl: false,
-      attributionControl: true,
+      attributionControl: false,
     });
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+
+    // CartoDB Positron Light (minimal monochrome grayscale map)
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
       maxZoom: 19,
-      attribution: "© OpenStreetMap",
+      subdomains: "abcd",
     }).addTo(map);
+
     L.control.zoom({ position: "bottomright" }).addTo(map);
     layerRef.current = L.layerGroup().addTo(map);
     mapRef.current = map;
-    setTimeout(() => map.invalidateSize(), 50);
+    const timer = setTimeout(() => {
+      try {
+        map.invalidateSize();
+      } catch {
+        // ignore if unmounted
+      }
+    }, 60);
 
     return () => {
-      map.remove();
+      clearTimeout(timer);
+      try {
+        map.remove();
+      } catch {
+        // ignore DOM removal race
+      }
       mapRef.current = null;
       layerRef.current = null;
     };
@@ -168,38 +193,37 @@ export default function LiveMap({ origin, destination, route, getLineColor, heig
         geocode(origin, controller.signal),
         geocode(destination, controller.signal),
       ]);
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || !mapRef.current) return;
 
       if (hasGeometry) {
         for (const s of steps) {
           const pts = (s.polylines || []).flatMap((p) => decodePolyline(p));
-          if (pts.length > 1) segments.push({ pts, style: stepStyle(s, getLineColor) });
+          if (pts.length > 1) segments.push({ pts, style: stepStyle(s) });
         }
       } else {
-        // Approximate path: origin -> transit stops -> destination
         let cursor = oCoords;
         for (let i = 0; i < steps.length; i++) {
           const s = steps[i];
           if (s.mode === "TRANSIT") {
             const dep = await geocode(s.departure_stop, controller.signal);
             const arr = await geocode(s.arrival_stop, controller.signal);
-            if (controller.signal.aborted) return;
+            if (controller.signal.aborted || !mapRef.current) return;
             if (cursor && dep) {
-              segments.push({ pts: [cursor, dep], style: stepStyle({ mode: "WALK" }, getLineColor) });
+              segments.push({ pts: [cursor, dep], style: stepStyle({ mode: "WALK" }) });
             }
-            if (dep && arr) segments.push({ pts: [dep, arr], style: stepStyle(s, getLineColor) });
+            if (dep && arr) segments.push({ pts: [dep, arr], style: stepStyle(s) });
             cursor = arr || dep || cursor;
           } else if (s.mode === "CITIBIKE" && cursor && dCoords) {
-            segments.push({ pts: [cursor, dCoords], style: stepStyle(s, getLineColor) });
+            segments.push({ pts: [cursor, dCoords], style: stepStyle(s) });
             cursor = dCoords;
           }
         }
         if (cursor && dCoords && cursor !== dCoords) {
-          segments.push({ pts: [cursor, dCoords], style: stepStyle({ mode: "WALK" }, getLineColor) });
+          segments.push({ pts: [cursor, dCoords], style: stepStyle({ mode: "WALK" }) });
         }
       }
 
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || !mapRef.current || !layerRef.current) return;
       layer.clearLayers();
       const bounds = [];
       for (const seg of segments) {
@@ -207,30 +231,34 @@ export default function LiveMap({ origin, destination, route, getLineColor, heig
         bounds.push(...seg.pts);
       }
       if (oCoords) {
-        L.marker(oCoords, { icon: circleIcon("#FFFFFF", "#1D1D1B") }).bindTooltip(origin).addTo(layer);
+        L.marker(oCoords, { icon: endpointIcon("A", false) }).addTo(layer);
         bounds.push(oCoords);
       }
       if (dCoords) {
-        const m = L.marker(dCoords, { icon: circleIcon("#C8202B", "#FFFFFF") }).addTo(layer);
-        if (route?.dur) {
-          m.bindTooltip(`${route.dur} min`, { permanent: true, direction: "top", offset: [0, -10] });
-        }
+        L.marker(dCoords, { icon: endpointIcon("B", true) }).addTo(layer);
         bounds.push(dCoords);
       }
       if (bounds.length > 1) {
-        map.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 });
+        map.fitBounds(bounds, { padding: [32, 32], maxZoom: 15 });
       } else if (bounds.length === 1) {
-        map.setView(bounds[0], 15);
+        map.setView(bounds[0], 14);
       }
     })();
 
     return () => controller.abort();
-  }, [origin, destination, route, getLineColor]);
+  }, [origin, destination, route]);
 
   return (
     <div
-      ref={containerRef}
-      style={{ position: "absolute", inset: 0, height: `${height}px`, width: "100%", zIndex: 0 }}
+      ref={wrapperRef}
+      style={{
+        position: "absolute",
+        inset: 0,
+        height: `${height}px`,
+        width: "100%",
+        zIndex: 0,
+        filter: "grayscale(100%) contrast(97%)",
+      }}
     />
   );
 }

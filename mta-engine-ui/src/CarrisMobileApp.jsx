@@ -285,18 +285,22 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
 
   const bikeRoute = useMemo(() => routes.find((r) => r.hasBike), [routes]);
 
-  // Sort routes: always keep the most reliable route first, then sort remaining by active filter
+  const mostReliableRoute = useMemo(() => {
+    if (routes.length === 0) return null;
+    return [...routes].sort((a, b) => b.score - a.score || a.dur - b.dur)[0];
+  }, [routes]);
+
+  const fastestRoute = useMemo(() => {
+    if (routes.length === 0) return null;
+    return [...routes].sort((a, b) => a.dur - b.dur || b.score - a.score)[0];
+  }, [routes]);
+
+  // Sort routes by the selected filter pill (defaulting to Mais fiável first)
   const sortedRoutes = useMemo(() => {
     const copy = [...routes];
-    const maxScore = copy.length > 0 ? Math.max(...copy.map((r) => r.score)) : 0;
     copy.sort((a, b) => {
-      // Always pin the most reliable route at the very top
-      const aTop = a.score === maxScore ? 1 : 0;
-      const bTop = b.score === maxScore ? 1 : 0;
-      if (aTop !== bTop) return bTop - aTop;
-
-      if (filterBy === "fiavel" || filterBy === "melhor") {
-        return b.score - a.score || a.dur - b.dur;
+      if (filterBy === "cedo") {
+        return a.dur - b.dur || b.score - a.score;
       }
       if (filterBy === "transbordos") {
         return a.transbordos - b.transbordos || b.score - a.score;
@@ -307,10 +311,8 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
       if (filterBy === "custo") {
         return a.cost - b.cost || a.dur - b.dur;
       }
-      if (filterBy === "cedo") {
-        return a.dur - b.dur;
-      }
-      return b.score - a.score;
+      // Default ("fiavel" / "melhor"): always show most reliable first
+      return b.score - a.score || a.dur - b.dur;
     });
     return copy;
   }, [routes, filterBy]);
@@ -871,6 +873,8 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                 }}
               >
                 <div
+                  translate="no"
+                  className="notranslate"
                   style={{
                     flex: "0 0 28px",
                     width: "28px",
@@ -915,6 +919,8 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                 }}
               >
                 <div
+                  translate="no"
+                  className="notranslate"
                   style={{
                     flex: "0 0 28px",
                     width: "28px",
@@ -1144,7 +1150,7 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
         )}
 
         {/* ============================================================
-            SCREEN 3: RESULTADOS & MAPA (Screenshots + CARRISway Hybrid)
+            SCREEN 3: RESULTADOS & MAPA (Clean Header + Filter Pills + Grayscale Map)
            ============================================================ */}
         {screen === "resultados" && (
           <section
@@ -1155,127 +1161,128 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
               display: "flex",
               flexDirection: "column",
               position: "relative",
+              padding: "14px 14px 20px",
+              gap: "12px",
             }}
           >
-            {/* MAP VIEW HEADER (Matches Screenshot 1 & 2) */}
-            <div
+            {/* CLEAN TOP HEADER: Back Button + Origin/Destination Card */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!loading) runLiveSimulation(origin, destination, allowBike);
+              }}
               style={{
-                position: "relative",
-                height: "300px",
-                background: "#E5E3DC",
-                overflow: "hidden",
+                display: "flex",
+                alignItems: "flex-start",
+                gap: "10px",
               }}
             >
-              {/* Real scrollable/zoomable OpenStreetMap with the selected route */}
-              <LiveMap
-                origin={searched.origin}
-                destination={searched.destination}
-                route={activeRoute}
-                getLineColor={getLineColor}
-                height={300}
-              />
-
-              {/* Floating Origin/Destination Card at Top of Map */}
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (!loading) runLiveSimulation(origin, destination, allowBike);
-                }}
+              <button
+                type="button"
+                onClick={() => setScreen("planear")}
+                aria-label="Voltar"
                 style={{
-                  position: "absolute",
-                  top: "12px",
-                  left: "12px",
-                  right: "12px",
-                  zIndex: 1000,
+                  width: "44px",
+                  height: "44px",
+                  flexShrink: 0,
                   background: "#FFFFFF",
-                  borderRadius: "16px",
-                  boxShadow: "0 4px 14px rgba(0,0,0,0.16)",
-                  padding: "8px 10px",
+                  border: "none",
+                  borderRadius: "8px",
+                  boxShadow: "0 2px 8px rgba(29, 29, 27, 0.12)",
                   display: "flex",
                   alignItems: "center",
-                  gap: "6px",
+                  justifyContent: "center",
+                  cursor: "pointer",
+                  color: "#1D1D1B",
                 }}
               >
-                <button
-                  type="button"
-                  onClick={() => setScreen("planear")}
-                  title="Editar pesquisa"
-                  style={{
-                    border: "none",
-                    background: "transparent",
-                    padding: "4px",
-                    cursor: "pointer",
-                    color: "#1D1D1B",
-                  }}
-                >
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M19 12H5M11 6l-6 6 6 6" />
-                  </svg>
-                </button>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                  <path d="M19 12H5M11 6l-6 6 6 6" />
+                </svg>
+              </button>
 
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "8px",
-                      paddingBottom: "4px",
-                      borderBottom: "1px solid #E6E6E3",
-                    }}
-                  >
+              <div
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  background: "#FFFFFF",
+                  borderRadius: "10px",
+                  boxShadow: "0 2px 8px rgba(29, 29, 27, 0.1)",
+                  padding: "8px 12px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                }}
+              >
+                <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                     <span
+                      translate="no"
+                      className="notranslate"
                       style={{
-                        width: "10px",
-                        height: "10px",
+                        width: "22px",
+                        height: "22px",
                         borderRadius: "50%",
-                        border: "2px solid #1D1D1B",
-                        display: "inline-block",
+                        background: "#FFD400",
+                        color: "#1D1D1B",
+                        fontSize: "12px",
+                        fontWeight: 700,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
                         flexShrink: 0,
                       }}
-                    />
+                    >
+                      A
+                    </span>
                     <input
                       type="text"
                       value={origin}
                       onChange={(e) => setOrigin(e.target.value)}
-                      placeholder="Origem (ex: Praça do Comércio)"
+                      placeholder="Origem"
                       style={{
                         border: "none",
                         outline: "none",
                         background: "transparent",
-                        fontSize: "13px",
+                        fontSize: "15px",
+                        fontWeight: 600,
                         color: "#1D1D1B",
                         width: "100%",
                       }}
                     />
                   </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "8px",
-                      paddingTop: "4px",
-                    }}
-                  >
+
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                     <span
+                      translate="no"
+                      className="notranslate"
                       style={{
-                        width: "10px",
-                        height: "10px",
+                        width: "22px",
+                        height: "22px",
                         borderRadius: "50%",
-                        background: "#C8202B",
-                        display: "inline-block",
+                        background: "#FFD400",
+                        color: "#1D1D1B",
+                        fontSize: "12px",
+                        fontWeight: 700,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
                         flexShrink: 0,
                       }}
-                    />
+                    >
+                      B
+                    </span>
                     <input
                       type="text"
                       value={destination}
                       onChange={(e) => setDestination(e.target.value)}
-                      placeholder="Destino (ex: Belém, Lisboa)"
+                      placeholder="Destino"
                       style={{
                         border: "none",
                         outline: "none",
                         background: "transparent",
-                        fontSize: "13px",
+                        fontSize: "15px",
+                        fontWeight: 600,
                         color: "#1D1D1B",
                         width: "100%",
                       }}
@@ -1283,120 +1290,20 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    const nextOrig = destination;
-                    const nextDest = origin;
-                    swapLocations();
-                    runLiveSimulation(nextOrig, nextDest, allowBike);
-                  }}
-                  aria-label="Inverter origem e destino"
-                  style={{
-                    width: "32px",
-                    height: "32px",
-                    borderRadius: "50%",
-                    border: "none",
-                    background: "#F4F4F2",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    cursor: "pointer",
-                    flexShrink: 0,
-                  }}
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#1D1D1B" strokeWidth="2">
-                    <path d="M8 20V4M4 8l4-4 4 4M16 4v16M12 16l4 4 4-4" />
-                  </svg>
-                </button>
-
-                <button
-                  type="submit"
-                  disabled={loading}
-                  style={{
-                    height: "32px",
-                    padding: "0 10px",
-                    borderRadius: "8px",
-                    border: "none",
-                    background: "#FFD400",
-                    color: "#1D1D1B",
-                    fontSize: "12px",
-                    fontWeight: 700,
-                    cursor: "pointer",
-                    flexShrink: 0,
-                  }}
-                >
-                  {loading ? "..." : "Ir"}
-                </button>
-              </form>
-            </div>
-
-            {/* BOTTOM SHEET CONTAINER */}
-            <div
-              style={{
-                flex: 1,
-                marginTop: "-16px",
-                background: "#FFFFFF",
-                borderTopLeftRadius: "20px",
-                borderTopRightRadius: "20px",
-                boxShadow: "0 -4px 16px rgba(0,0,0,0.1)",
-                display: "flex",
-                flexDirection: "column",
-                zIndex: 2,
-                paddingBottom: "20px",
-              }}
-            >
-              <div
-                style={{
-                  width: "36px",
-                  height: "4px",
-                  borderRadius: "2px",
-                  background: "#D9D9D5",
-                  margin: "8px auto 6px",
-                }}
-              />
-
-              {/* Sheet Title & Action Icons */}
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "4px 16px 8px",
-                }}
-              >
-                <h2 style={{ margin: 0, fontSize: "19px", fontWeight: 500, color: "#1D1D1B" }}>
-                  Transportes públicos
-                </h2>
-
-                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: "4px", flexShrink: 0 }}>
                   <button
                     type="button"
-                    onClick={() => setShowPercentages(!showPercentages)}
-                    title="Mostrar/Ocultar percentagens"
-                    style={{
-                      height: "34px",
-                      padding: "0 10px",
-                      borderRadius: "17px",
-                      border: "1px solid #E6E6E3",
-                      background: showPercentages ? "#FFD400" : "#F4F4F2",
-                      color: "#1D1D1B",
-                      fontSize: "12px",
-                      fontWeight: 700,
-                      cursor: "pointer",
+                    onClick={() => {
+                      const nextOrig = destination;
+                      const nextDest = origin;
+                      swapLocations();
+                      runLiveSimulation(nextOrig, nextDest, allowBike);
                     }}
-                  >
-                    % {showPercentages ? "ON" : "OFF"}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setShowFilterModal(true)}
-                    aria-label="Filtrar por"
+                    title="Inverter origem e destino"
                     style={{
-                      width: "34px",
-                      height: "34px",
-                      borderRadius: "50%",
+                      width: "26px",
+                      height: "26px",
+                      borderRadius: "6px",
                       border: "none",
                       background: "#F4F4F2",
                       display: "flex",
@@ -1405,67 +1312,58 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                       cursor: "pointer",
                     }}
                   >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#1D1D1B" strokeWidth="2">
-                      <path d="M4 6h16M4 12h16M4 18h16" />
-                      <circle cx="8" cy="6" r="2" fill="#FFFFFF" />
-                      <circle cx="16" cy="12" r="2" fill="#FFFFFF" />
-                      <circle cx="10" cy="18" r="2" fill="#FFFFFF" />
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1D1D1B" strokeWidth="2">
+                      <path d="M8 20V4M4 8l4-4 4 4M16 4v16M12 16l4 4 4-4" />
                     </svg>
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    title="Pesquisar"
+                    style={{
+                      width: "26px",
+                      height: "26px",
+                      borderRadius: "6px",
+                      border: "none",
+                      background: "#FFD400",
+                      color: "#1D1D1B",
+                      fontSize: "11px",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <span>{loading ? "…" : "↵"}</span>
                   </button>
                 </div>
               </div>
+            </form>
 
-              {/* Transport Mode Strip */}
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-around",
-                  borderBottom: "1px solid #E6E6E3",
-                  padding: "0 8px",
-                }}
-              >
-                <div
-                  style={{
-                    padding: "8px 10px",
-                    fontSize: "12px",
-                    color: "#6B6B66",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "5px",
-                  }}
-                >
-                  <span>🚗</span>
-                  <span>19 min</span>
-                </div>
-                <div
-                  style={{
-                    padding: "8px 12px",
-                    fontSize: "13px",
-                    fontWeight: 700,
-                    color: "#00767A",
-                    borderBottom: "3px solid #00767A",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "5px",
-                  }}
-                >
-                  <span>🚆</span>
-                  <span>{sortedRoutes[0]?.dur || 39} min</span>
-                </div>
-                <div
-                  style={{
-                    padding: "8px 10px",
-                    fontSize: "12px",
-                    color: "#6B6B66",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "5px",
-                  }}
-                >
-                  <span>🚶</span>
-                  <span>1 h 15</span>
-                </div>
+            {/* SUBTITLE META LINE: Clock + Departure + Route Count + Quick Toggles */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "8px",
+                padding: "0 2px",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "#585862" }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#003F8F" strokeWidth="2">
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="M12 7v5l3 2" />
+                </svg>
+                <span>
+                  Dia útil · partida às{" "}
+                  {String(sortedRoutes[0]?.sai || "09:45").replace(/\s*(AM|PM)/i, "")} ·{" "}
+                  {sortedRoutes.length} percursos
+                </span>
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                 <button
                   type="button"
                   onClick={() => {
@@ -1474,115 +1372,135 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                     runLiveSimulation(origin, destination, next);
                   }}
                   style={{
-                    padding: "8px 10px",
-                    fontSize: "12px",
-                    color: allowBike ? "#1A7F46" : "#6B6B66",
-                    fontWeight: allowBike ? 700 : 400,
-                    background: "transparent",
-                    border: "none",
+                    height: "26px",
+                    padding: "0 8px",
+                    borderRadius: "13px",
+                    border: `1px solid ${allowBike ? "#1D1D1B" : "#D9D9D5"}`,
+                    background: allowBike ? "#FFD400" : "#FFFFFF",
+                    color: "#1D1D1B",
+                    fontSize: "11px",
+                    fontWeight: 600,
                     cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "5px",
                   }}
                 >
-                  <span>🚲</span>
-                  <span>{!allowBike ? "Gira OFF" : loading ? "Gira…" : bikeRoute ? `${bikeRoute.dur} min` : "Sem rota Gira"}</span>
+                  <span>🚲 {allowBike ? (bikeRoute ? `${bikeRoute.dur}m` : "ON") : "OFF"}</span>
                 </button>
-              </div>
-
-              {/* Filter Pill Bar */}
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "6px",
-                  padding: "10px 14px",
-                  overflowX: "auto",
-                }}
-              >
                 <button
                   type="button"
-                  onClick={() => setShowFilterModal(true)}
+                  onClick={() => setShowPercentages(!showPercentages)}
                   style={{
-                    flexShrink: 0,
-                    height: "32px",
-                    padding: "0 12px",
-                    borderRadius: "8px",
+                    height: "26px",
+                    padding: "0 8px",
+                    borderRadius: "13px",
                     border: "1px solid #D9D9D5",
-                    background: "#FFD400",
+                    background: showPercentages ? "#FFD400" : "#FFFFFF",
                     color: "#1D1D1B",
-                    fontSize: "12px",
-                    fontWeight: 600,
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "5px",
+                    fontSize: "11px",
+                    fontWeight: 700,
                     cursor: "pointer",
                   }}
                 >
-                  <span>✓ {FILTER_OPTIONS.find((f) => f.id === filterBy)?.label}</span>
-                  <span>▾</span>
+                  <span>%</span>
                 </button>
-
-                {[
-                  { id: "fiavel", label: "Mais fiável" },
-                  { id: "melhor", label: "Melhor rota" },
-                  { id: "transbordos", label: "Menos transbordos" },
-                  { id: "caminhar", label: "Caminhar menos" },
-                ].map((chip) => {
-                  const on = filterBy === chip.id;
-                  return (
-                    <button
-                      key={chip.id}
-                      type="button"
-                      onClick={() => setFilterBy(chip.id)}
-                      style={{
-                        flexShrink: 0,
-                        height: "32px",
-                        padding: "0 11px",
-                        borderRadius: "16px",
-                        border: `1px solid ${on ? "#003F8F" : "#D9D9D5"}`,
-                        background: on ? "#003F8F" : "#FFFFFF",
-                        color: on ? "#FFFFFF" : "#1D1D1B",
-                        fontSize: "12px",
-                        fontWeight: on ? 600 : 400,
-                        cursor: "pointer",
-                      }}
-                    >
-                      {chip.label}
-                    </button>
-                  );
-                })}
               </div>
+            </div>
 
-              {/* CARRISway Yellow Reliability Callout Banner */}
-              <div
-                style={{
-                  margin: "2px 14px 10px",
-                  background: "#FFD400",
-                  borderRadius: "8px",
-                  padding: "9px 12px",
-                  fontSize: "12px",
-                  fontWeight: 500,
-                  lineHeight: 1.4,
-                  color: "#1D1D1B",
-                }}
-              >
-                {loading ? (
-                  <span>A calcular rotas reais e simulação Monte Carlo em tempo real...</span>
-                ) : sortedRoutes.length > 0 ? (
+            {/* CLEAN 3-PILL FILTER BAR (Matches Uploaded Screenshot) */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                overflowX: "auto",
+              }}
+            >
+              {[
+                { id: "fiavel", label: "Mais fiável" },
+                { id: "cedo", label: "Mais rápida" },
+                { id: "transbordos", label: "Menos transbordos" },
+              ].map((chip) => {
+                const on = filterBy === chip.id || (chip.id === "fiavel" && filterBy === "melhor");
+                return (
+                  <button
+                    key={chip.id}
+                    type="button"
+                    onClick={() => setFilterBy(chip.id)}
+                    style={{
+                      flexShrink: 0,
+                      height: "36px",
+                      padding: "0 16px",
+                      borderRadius: "20px",
+                      border: on ? "1px solid #FFD400" : "1px solid #D9D9D5",
+                      background: on ? "#FFD400" : "#FFFFFF",
+                      color: "#1D1D1B",
+                      fontSize: "13px",
+                      fontWeight: on ? 700 : 400,
+                      cursor: "pointer",
+                    }}
+                  >
+                    <span>{chip.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* YELLOW RELIABILITY COMPARISON BANNER (Matches Uploaded Screenshot) */}
+            <div
+              style={{
+                background: "#FFD400",
+                borderRadius: "8px",
+                padding: "10px 12px",
+                fontSize: "12.5px",
+                fontWeight: 600,
+                lineHeight: 1.4,
+                color: "#1D1D1B",
+              }}
+            >
+              {loading ? (
+                <span>A simular percursos e fiabilidade em tempo real…</span>
+              ) : mostReliableRoute && fastestRoute ? (
+                mostReliableRoute.id !== fastestRoute.id && mostReliableRoute.dur > fastestRoute.dur ? (
                   <span>
-                    A opção recomendada chega a horas em <strong>{sortedRoutes[0]?.score}% das viagens</strong>, tendo em conta transporte, transbordos, trânsito e tempo.
+                    A opção mais fiável demora +{mostReliableRoute.dur - fastestRoute.dur} min do que
+                    a mais rápida, mas chega a horas em {mostReliableRoute.score}% das viagens (na
+                    mais rápida, {fastestRoute.score}%).
                   </span>
                 ) : (
-                  <span>Introduza origem e destino e toque em Ir para simular rotas reais.</span>
-                )}
-              </div>
+                  <span>
+                    A opção mais fiável é também a mais rápida ({mostReliableRoute.dur} min) e chega a
+                    horas em {mostReliableRoute.score}% das viagens.
+                  </span>
+                )
+              ) : (
+                <span>Introduza origem e destino para comparar a fiabilidade dos percursos.</span>
+              )}
+            </div>
 
+            {/* MINIMAL GRAYSCALE SCROLLABLE MAP */}
+            <div
+              style={{
+                position: "relative",
+                height: "175px",
+                borderRadius: "10px",
+                background: "#E8E8E5",
+                border: "1px solid #D9D9D5",
+                overflow: "hidden",
+              }}
+            >
+              <LiveMap
+                origin={searched.origin}
+                destination={searched.destination}
+                route={activeRoute}
+                height={175}
+              />
+            </div>
+
+            {/* ALERTS & BIKE BANNER */}
+            <div>
               {errorMsg && (
                 <div
                   style={{
-                    margin: "0 14px 10px",
+                    marginBottom: "10px",
                     padding: "10px 12px",
                     borderRadius: "8px",
                     background: "#FEE2E2",
@@ -1591,14 +1509,14 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                     fontWeight: 500,
                   }}
                 >
-                  {errorMsg}
+                  <span>{errorMsg}</span>
                 </div>
               )}
 
               {routeSource === "fallback" && !loading && (
                 <div
                   style={{
-                    margin: "0 14px 10px",
+                    marginBottom: "10px",
                     padding: "10px 12px",
                     borderRadius: "8px",
                     background: "#FEF3C7",
@@ -1607,8 +1525,10 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                     fontWeight: 500,
                   }}
                 >
-                  ⚠️ O Google Routes não respondeu (quota esgotada ou sem rede). A mostrar rotas
-                  aproximadas de recurso — não são horários reais.
+                  <span>
+                    ⚠️ O Google Routes não respondeu (quota esgotada ou sem rede). A mostrar rotas
+                    aproximadas de recurso — não são horários reais.
+                  </span>
                 </div>
               )}
 
@@ -1617,7 +1537,8 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                   type="button"
                   onClick={() => setSelectedRouteId(bikeRoute.id)}
                   style={{
-                    margin: "0 14px 10px",
+                    width: "100%",
+                    marginBottom: "10px",
                     padding: "10px 12px",
                     borderRadius: "8px",
                     border: `2px solid ${activeRoute?.id === bikeRoute.id ? "#1A7F46" : "#BBE5CC"}`,
@@ -1641,22 +1562,21 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
               {allowBike && !bikeRoute && !loading && routes.length > 0 && (
                 <div
                   style={{
-                    margin: "0 14px 10px",
+                    marginBottom: "10px",
                     padding: "10px 12px",
                     borderRadius: "8px",
-                    background: "#F4F4F2",
+                    background: "#FFFFFF",
                     color: "#585862",
                     fontSize: "12px",
                   }}
                 >
-                  🚲 Gira ativa, mas não há rota de bicicleta viável para este percurso.
+                  <span>🚲 Gira ativa, mas não há rota de bicicleta viável para este percurso.</span>
                 </div>
               )}
 
               {/* ROUTE CARDS LIST */}
               <div
                 style={{
-                  padding: "0 14px",
                   display: "flex",
                   flexDirection: "column",
                   gap: "10px",
