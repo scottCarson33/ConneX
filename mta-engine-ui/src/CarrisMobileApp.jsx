@@ -107,6 +107,7 @@ function compressWalkSteps(itinerary) {
       if (merged.length > 0 && merged[merged.length - 1].mode === "WALK") {
         const prev = merged[merged.length - 1];
         prev.baseline_duration = (prev.baseline_duration || 0) + (step.baseline_duration || 0);
+        prev.polylines = [...(prev.polylines || []), ...(step.polylines || [])];
         if (step.line_display && step.line_display.toLowerCase().includes("walk to")) {
           prev.line_display = step.line_display;
         }

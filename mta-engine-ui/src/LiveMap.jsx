@@ -1,9 +1,12 @@
 import React, { useEffect, useRef } from "react";
-import L from "leaflet";
+import ImportedL from "leaflet";
 import "leaflet/dist/leaflet.css";
 
+// Use global window.L (which has L.maplibreGL attached from @maplibre/maplibre-gl-leaflet)
+const getL = () => (typeof window !== "undefined" && window.L ? window.L : ImportedL);
+
 // Lisbon city centre [lat, lng]
-const LISBON_CENTER = [38.726, -9.145];
+const LISBON_CENTER = [38.72, -9.14];
 
 // Fallback coordinates [lat, lng] when a route has no encoded polylines
 const KNOWN_PLACES = {
@@ -120,7 +123,7 @@ function stepColor(step, getLineColor, legIdx = 0) {
   return fallbackPalette[legIdx % fallbackPalette.length];
 }
 
-function makeEndpointIcon(label) {
+function makeEndpointIcon(L, label) {
   return L.divIcon({
     className: "",
     iconSize: [28, 28],
@@ -136,7 +139,7 @@ function makeEndpointIcon(label) {
   });
 }
 
-function makeTransferIcon(stopName, fromLine, toLine) {
+function makeTransferIcon(L, stopName, fromLine, toLine) {
   const cleanStop = String(stopName || "Paragem")
     .replace(/, Lisboa.*$/i, "")
     .trim();
@@ -195,54 +198,83 @@ export default function LiveMap({ origin, destination, route, getLineColor, heig
   const mapRef = useRef(null);
   const layerRef = useRef(null);
 
-  // Initialise Leaflet with standard OpenStreetMap tiles
+  // Initialise Leaflet + MapLibre GL (OpenFreeMap Liberty style) exactly as in the design prototype
   useEffect(() => {
     const wrapper = wrapperRef.current;
     if (!wrapper || mapRef.current) return;
 
+    const L = getL();
     const mapEl = document.createElement("div");
     mapEl.style.width = "100%";
-    mapEl.style.height = "100%";
+    mapEl.style.height = `${height}px`;
     wrapper.innerHTML = "";
     wrapper.appendChild(mapEl);
 
-    const map = L.map(mapEl, {
-      center: LISBON_CENTER,
-      zoom: 13,
+    const mapa = L.map(mapEl, {
       zoomControl: false,
-      attributionControl: false,
-    });
+    }).setView(LISBON_CENTER, 13);
 
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 19,
-      attribution: "© OpenStreetMap contributors",
-    }).addTo(map);
+    L.control.zoom({ position: "topright" }).addTo(mapa);
 
-    L.control.zoom({ position: "topright" }).addTo(map);
-    L.control
-      .attribution({ position: "bottomright", prefix: false })
-      .addAttribution("© OpenStreetMap · GTFS Carris")
-      .addTo(map);
+    let gl = null;
+    if (typeof L.maplibreGL === "function") {
+      gl = L.maplibreGL({
+        style: "https://tiles.openfreemap.org/styles/liberty",
+      }).addTo(mapa);
 
-    layerRef.current = L.layerGroup().addTo(map);
-    mapRef.current = map;
+      const ml = gl.getMaplibreMap?.();
+      if (ml && typeof ml.on === "function") {
+        ml.on("load", function () {
+          if (mapa.attributionControl) {
+            mapa.attributionControl.addAttribution(
+              'GTFS Carris · <a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> &copy; ' +
+                '<a href="https://www.openmaptiles.org/" target="_blank">OpenMapTiles</a>'
+            );
+          }
+          try {
+            ml.resize();
+          } catch {
+            // ignore
+          }
+        });
+      }
+    } else {
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: "© OpenStreetMap · GTFS Carris",
+      }).addTo(mapa);
+    }
+
+    layerRef.current = L.layerGroup().addTo(mapa);
+    mapRef.current = mapa;
+
+    const timer = setTimeout(() => {
+      try {
+        mapa.invalidateSize();
+        gl?.getMaplibreMap?.()?.resize();
+      } catch {
+        // Ignore if unmounted
+      }
+    }, 80);
 
     return () => {
+      clearTimeout(timer);
       try {
-        map.remove();
+        mapa.remove();
       } catch {
         // Ignore DOM cleanup race
       }
       mapRef.current = null;
       layerRef.current = null;
     };
-  }, []);
+  }, [height]);
 
   // Draw route polylines & markers whenever the selected route changes
   useEffect(() => {
-    const map = mapRef.current;
+    const mapa = mapRef.current;
     const group = layerRef.current;
-    if (!map || !group) return;
+    if (!mapa || !group) return;
+    const L = getL();
     const controller = new AbortController();
 
     (async () => {
@@ -367,8 +399,7 @@ export default function LiveMap({ origin, destination, route, getLineColor, heig
       for (let i = 0; i < transitSegments.length - 1; i++) {
         const currSeg = transitSegments[i];
         const nextSeg = transitSegments[i + 1];
-        const transferPt =
-          nextSeg.pts[0] || currSeg.pts[currSeg.pts.length - 1];
+        const transferPt = nextSeg.pts[0] || currSeg.pts[currSeg.pts.length - 1];
         if (transferPt) {
           const stopName =
             nextSeg.step.departure_stop && nextSeg.step.departure_stop !== "N/A"
@@ -377,7 +408,7 @@ export default function LiveMap({ origin, destination, route, getLineColor, heig
           const fromCode = cleanLineCode(currSeg.step);
           const toCode = cleanLineCode(nextSeg.step);
           L.marker(transferPt, {
-            icon: makeTransferIcon(stopName, fromCode, toCode),
+            icon: makeTransferIcon(L, stopName, fromCode, toCode),
             zIndexOffset: 900,
           }).addTo(group);
         }
@@ -387,13 +418,13 @@ export default function LiveMap({ origin, destination, route, getLineColor, heig
       if (allPts.length >= 2) {
         const start = allPts[0];
         const end = allPts[allPts.length - 1];
-        L.marker(start, { icon: makeEndpointIcon("A"), zIndexOffset: 1000 })
+        L.marker(start, { icon: makeEndpointIcon(L, "A"), zIndexOffset: 1000 })
           .bindTooltip(`Origem: ${origin || "A"}`)
           .addTo(group);
-        L.marker(end, { icon: makeEndpointIcon("B"), zIndexOffset: 1000 })
+        L.marker(end, { icon: makeEndpointIcon(L, "B"), zIndexOffset: 1000 })
           .bindTooltip(`Destino: ${destination || "B"}`)
           .addTo(group);
-        map.fitBounds(L.latLngBounds(allPts), { padding: [36, 36], maxZoom: 15 });
+        mapa.fitBounds(L.latLngBounds(allPts), { padding: [36, 36], maxZoom: 15 });
       }
     })();
 
@@ -413,7 +444,7 @@ export default function LiveMap({ origin, destination, route, getLineColor, heig
         background: "#EAE6DF",
       }}
     >
-      <div ref={wrapperRef} style={{ width: "100%", height: "100%" }} />
+      <div ref={wrapperRef} style={{ width: "100%", height: `${height}px` }} />
     </div>
   );
 }
