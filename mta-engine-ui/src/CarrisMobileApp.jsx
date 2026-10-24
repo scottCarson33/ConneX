@@ -219,8 +219,8 @@ const FILTER_OPTIONS = [
 
 export default function CarrisMobileApp({ onSwitchToClassic }) {
   const [screen, setScreen] = useState("resultados"); // 'menu' | 'planear' | 'resultados' | 'detalhe'
-  const [origin, setOrigin] = useState("Praça do Comércio");
-  const [destination, setDestination] = useState("Belém, Lisboa");
+  const [origin, setOrigin] = useState("Ikonik Hotel");
+  const [destination, setDestination] = useState("IGOT ULisboa");
   const [allowBike, setAllowBike] = useState(false);
   const [showPercentages, setShowPercentages] = useState(true);
   const [filterBy, setFilterBy] = useState("fiavel");
@@ -230,7 +230,7 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
   const [routes, setRoutes] = useState([]);
   const [selectedRouteId, setSelectedRouteId] = useState(null);
   const [alertEnabled, setAlertEnabled] = useState(false);
-  const [searched, setSearched] = useState({ origin: "Praça do Comércio", destination: "Belém, Lisboa" });
+  const [searched, setSearched] = useState({ origin: "Ikonik Hotel", destination: "IGOT ULisboa" });
   const [routeSource, setRouteSource] = useState("google");
   const [timeMode, setTimeMode] = useState("depart_at"); // 'depart_at' | 'arrive_by'
   const [customTime, setCustomTime] = useState(null); // null ('Partir agora') or { hour, minute }
@@ -252,18 +252,24 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
 
   const buildTargetTimeIso = (timeObj) => {
     if (!timeObj) return null;
+    const now = new Date();
     const d = new Date();
     d.setHours(timeObj.hour, timeObj.minute, 0, 0);
+    if (d.getTime() <= now.getTime() + 60 * 1000) {
+      d.setDate(d.getDate() + 1);
+    }
     return d.toISOString();
   };
 
-  const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+  const API_BASE_URL =
+    import.meta.env.VITE_API_URL ||
+    `http://${typeof window !== "undefined" && window.location?.hostname ? window.location.hostname : "localhost"}:8000`;
 
   const recentSearches = [
+    { a: "Ikonik Hotel", b: "IGOT ULisboa" },
     { a: "Praça do Comércio", b: "Belém, Lisboa" },
     { a: "Campo Grande", b: "Cais do Sodré" },
     { a: "Oriente", b: "Marquês de Pombal" },
-    { a: "IGOT-ULisboa - Instituto de Geografia", b: "Ikonik Lisboa" },
   ];
 
   // Fetch live simulation from backend API
@@ -340,10 +346,11 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
   };
 
   useEffect(() => {
-    runLiveSimulation("Praça do Comércio", "Belém, Lisboa", false);
+    setRouteSource("google");
+    runLiveSimulation("Ikonik Hotel", "IGOT ULisboa", allowBike);
     return () => requestRef.current?.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, ["google-key-v3"]);
 
   const bikeRoute = useMemo(() => routes.find((r) => r.hasBike), [routes]);
 
@@ -1633,12 +1640,33 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                     color: "#92400E",
                     fontSize: "12px",
                     fontWeight: 500,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "8px",
                   }}
                 >
                   <span>
                     ⚠️ O Google Routes não respondeu (quota esgotada ou sem rede). A mostrar rotas
                     aproximadas de recurso — não são horários reais.
                   </span>
+                  <button
+                    type="button"
+                    onClick={() => runLiveSimulation(origin, destination, allowBike)}
+                    style={{
+                      flexShrink: 0,
+                      padding: "4px 8px",
+                      borderRadius: "6px",
+                      border: "1px solid #D97706",
+                      background: "#FFFFFF",
+                      color: "#92400E",
+                      fontSize: "11px",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Tentar novamente
+                  </button>
                 </div>
               )}
 

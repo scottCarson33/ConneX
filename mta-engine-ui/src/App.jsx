@@ -53,8 +53,8 @@ class CarrisErrorBoundary extends React.Component {
 
 export default function App() {
   const [viewMode, setViewMode] = useState("carris");
-  const [origin, setOrigin] = useState("Praça do Comércio");
-  const [destination, setDestination] = useState("Belém, Lisboa");
+  const [origin, setOrigin] = useState("Ikonik Hotel");
+  const [destination, setDestination] = useState("IGOT ULisboa");
   const [timeMode, setTimeMode] = useState("depart_at");
   const [targetTime, setTargetTime] = useState("");
   const [showTimePicker, setShowTimePicker] = useState(false);

@@ -30,7 +30,16 @@ logger = logging.getLogger(__name__)
 LISBON_TZ = ZoneInfo("Europe/Lisbon")
 
 # --- SECURE CONFIGURATION TOKENS ---
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "AIzaSyDyiFzvUe3K7rFAXGi90QX0MQlDibmVThc")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "AIzaSyDOIKsJLfXZVoK7s8QThdu2RtjFIhzRQnQ")
+GOOGLE_API_KEYS = list(
+    dict.fromkeys(
+        [
+            GOOGLE_API_KEY,
+            "AIzaSyDOIKsJLfXZVoK7s8QThdu2RtjFIhzRQnQ",
+            "AIzaSyDyiFzvUe3K7rFAXGi90QX0MQlDibmVThc",
+        ]
+    )
+)
 
 # Lisbon transit doesn't require API keys for GTFS feeds
 
@@ -384,6 +393,10 @@ def inject_citibike_alternative(
 def normalize_lisbon_address(addr: str) -> str:
     cleaned = str(addr or "").strip()
     lower = cleaned.lower()
+    if lower in ["ikonik hotel", "hotel ikonik", "ikonik hotel, lisboa"]:
+        return "Ikonik Lisboa, Lisboa, Portugal"
+    if lower in ["igot ulisboa", "igot-ulisboa", "igot"]:
+        return "IGOT-ULisboa - Instituto de Geografia e Ordenamento do Território, Lisboa, Portugal"
     if not any(
         k in lower
         for k in [
@@ -404,41 +417,74 @@ def normalize_lisbon_address(addr: str) -> str:
 
 
 def fetch_google_itineraries(
-    origin: str, destination: str, target_time: datetime, time_mode: str, allow_bike: bool = False
+    origin: str,
+    destination: str,
+    target_time: datetime,
+    time_mode: str,
+    allow_bike: bool = False,
+    has_custom_time: bool = False,
 ) -> List[Dict]:
-    headers = {
-        "Content-Type": "application/json",
-        "X-Goog-Api-Key": GOOGLE_API_KEY,
-        "X-Goog-FieldMask": "routes.duration,routes.legs.steps,routes.travelAdvisory",
-    }
-
     norm_origin = normalize_lisbon_address(origin)
     norm_dest = normalize_lisbon_address(destination)
 
-    payload = {
+    base_payload = {
         "origin": {"address": norm_origin},
         "destination": {"address": norm_dest},
         "travelMode": "TRANSIT",
         "computeAlternativeRoutes": True,
     }
 
-    rfc_time = target_time.strftime("%Y-%m-%dT%H:%M:%SZ")
-    if time_mode == "arrive_by":
-        payload["arrivalTime"] = rfc_time
-    else:
-        payload["departureTime"] = rfc_time
+    now_utc = datetime.now(timezone.utc)
+    utc_target = (
+        target_time.astimezone(timezone.utc)
+        if target_time.tzinfo
+        else target_time.replace(tzinfo=timezone.utc)
+    )
+    # Google Routes API v2 strictly rejects timestamps in the past.
+    if utc_target <= now_utc + timedelta(minutes=2):
+        if utc_target >= now_utc - timedelta(minutes=5) and time_mode != "arrive_by":
+            utc_target = now_utc + timedelta(minutes=2)
+        else:
+            while utc_target <= now_utc + timedelta(minutes=2):
+                utc_target += timedelta(days=1)
 
-    try:
-        response = requests.post(ROUTES_ENDPOINT, json=payload, headers=headers, timeout=5)
-        data = response.json()
-        if response.status_code != 200:
-            logger.warning(
-                f"Google Routes API returned {response.status_code}: "
-                f"{data.get('error', {}).get('message', '')[:200]}"
-            )
-    except Exception as e:
-        logger.warning(f"Google Routes API call failed ({e}); falling back to Lisbon transit routing.")
-        data = {}
+    rfc_time = utc_target.strftime("%Y-%m-%dT%H:%M:%SZ")
+    payload = dict(base_payload)
+    if has_custom_time or time_mode == "arrive_by":
+        if time_mode == "arrive_by":
+            payload["arrivalTime"] = rfc_time
+        else:
+            payload["departureTime"] = rfc_time
+
+    data = {}
+    for api_key in GOOGLE_API_KEYS:
+        headers = {
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": api_key,
+            "X-Goog-FieldMask": "routes.duration,routes.legs.steps,routes.travelAdvisory",
+        }
+        try:
+            response = requests.post(ROUTES_ENDPOINT, json=payload, headers=headers, timeout=8)
+            resp_json = response.json()
+            if response.status_code == 200 and resp_json.get("routes"):
+                data = resp_json
+                break
+            # If timestamp caused a 400 or empty routes, retry immediately without timestamp (depart now)
+            if "departureTime" in payload or "arrivalTime" in payload:
+                retry_resp = requests.post(
+                    ROUTES_ENDPOINT, json=base_payload, headers=headers, timeout=8
+                )
+                retry_json = retry_resp.json()
+                if retry_resp.status_code == 200 and retry_json.get("routes"):
+                    data = retry_json
+                    break
+            if response.status_code != 200:
+                logger.warning(
+                    f"Google Routes API returned {response.status_code}: "
+                    f"{resp_json.get('error', {}).get('message', '')[:200]}"
+                )
+        except Exception as e:
+            logger.warning(f"Google Routes API call failed ({e}); trying next key or fallback.")
 
     parsed = []
     for idx, route in enumerate(data.get("routes", []), 1):
@@ -1432,7 +1478,12 @@ def run_simulation(req: SimulationRequest):
         # In Arrive By mode, Google gives us an itinerary where the start time is calculated backwards.
         # We extract that start time from the first step and run our forward Monte Carlo from there.
         itineraries = fetch_google_itineraries(
-            req.origin, req.destination, target_dt, req.time_mode, req.allow_bike
+            req.origin,
+            req.destination,
+            target_dt,
+            req.time_mode,
+            req.allow_bike,
+            has_custom_time=bool(req.target_time),
         )
         if not itineraries:
             raise HTTPException(status_code=400, detail="No routes found")
