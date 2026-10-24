@@ -230,6 +230,7 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
   const [routes, setRoutes] = useState([]);
   const [selectedRouteId, setSelectedRouteId] = useState(null);
   const [alertEnabled, setAlertEnabled] = useState(false);
+  const [showAlertModal, setShowAlertModal] = useState(false);
   const [boughtRouteId, setBoughtRouteId] = useState(null);
   const [searched, setSearched] = useState({ origin: "Ikonik Hotel", destination: "IGOT ULisboa" });
   const [routeSource, setRouteSource] = useState("google");
@@ -2612,7 +2613,13 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
 
                 <button
                   type="button"
-                  onClick={() => setAlertEnabled(!alertEnabled)}
+                  onClick={() => {
+                    const next = !alertEnabled;
+                    setAlertEnabled(next);
+                    if (next) {
+                      setShowAlertModal(true);
+                    }
+                  }}
                   style={{
                     minHeight: "46px",
                     border: "1px solid #D9D9D5",
@@ -2940,6 +2947,103 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                   <span>Definir</span>
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ============================================================
+            ALERT ACTIVATED POPUP MODAL
+           ============================================================ */}
+        {showAlertModal && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Alert active"
+            onClick={() => setShowAlertModal(false)}
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 3000,
+              background: "rgba(29, 29, 27, 0.5)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: "20px",
+            }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                width: "100%",
+                maxWidth: "340px",
+                background: "#FFFFFF",
+                borderRadius: "16px",
+                boxShadow: "0 12px 36px rgba(0, 0, 0, 0.28)",
+                padding: "22px 20px 18px",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                textAlign: "center",
+                gap: "12px",
+              }}
+            >
+              <div
+                style={{
+                  width: "48px",
+                  height: "48px",
+                  borderRadius: "50%",
+                  background: "#ECFDF3",
+                  color: "#1A7F46",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: "22px",
+                }}
+              >
+                🔔
+              </div>
+              <h3
+                style={{
+                  margin: 0,
+                  fontSize: "17px",
+                  fontWeight: 700,
+                  color: "#1D1D1B",
+                }}
+              >
+                <span>Journey Alert Active</span>
+              </h3>
+              <p
+                style={{
+                  margin: 0,
+                  fontSize: "14px",
+                  lineHeight: 1.5,
+                  color: "#585862",
+                }}
+              >
+                <span>
+                  This alert is now active during your expected journey, if the reliability rate
+                  drops to a lower tier of reliability due to live factors you will be informed and
+                  an alternative given.
+                </span>
+              </p>
+              <button
+                type="button"
+                onClick={() => setShowAlertModal(false)}
+                style={{
+                  marginTop: "6px",
+                  width: "100%",
+                  height: "44px",
+                  borderRadius: "10px",
+                  border: "none",
+                  background: "#FFD400",
+                  color: "#1D1D1B",
+                  fontSize: "15px",
+                  fontWeight: 700,
+                  cursor: "pointer",
+                }}
+              >
+                <span>OK</span>
+              </button>
             </div>
           </div>
         )}
