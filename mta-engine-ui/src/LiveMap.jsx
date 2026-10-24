@@ -1,12 +1,9 @@
 import React, { useEffect, useRef } from "react";
-import * as maplibregl from "maplibre-gl";
-import "maplibre-gl/dist/maplibre-gl.css";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 
-// Lisbon city centre [lng, lat] for MapLibre
-const LISBON_CENTER = [-9.145, 38.726];
-
-// OpenFreeMap "liberty" vector style — exact match for the clean, low-color map in the screenshot
-const OPENFREEMAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
+// Lisbon city centre [lat, lng]
+const LISBON_CENTER = [38.726, -9.145];
 
 // Fallback coordinates [lat, lng] when a route has no encoded polylines
 const KNOWN_PLACES = {
@@ -123,55 +120,82 @@ function stepColor(step, getLineColor, legIdx = 0) {
   return fallbackPalette[legIdx % fallbackPalette.length];
 }
 
-// Sample intermediate points along a polyline to draw transit stop dots
-function sampleStopPoints(pts, count = 6) {
-  if (!pts || pts.length < 4) return [];
-  const numStops = Math.min(8, Math.max(3, count));
-  const sampled = [];
-  for (let i = 1; i < numStops; i++) {
-    const idx = Math.floor((i / numStops) * (pts.length - 1));
-    if (pts[idx]) sampled.push(pts[idx]);
-  }
-  return sampled;
+function makeEndpointIcon(label) {
+  return L.divIcon({
+    className: "",
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+    html: `<div translate="no" class="notranslate" style="
+      width:28px;height:28px;border-radius:50%;
+      background:#FFD400;color:#1D1D1B;
+      border:2.5px solid #1D1D1B;
+      display:flex;align-items:center;justify-content:center;
+      font-size:13px;font-weight:800;font-family:Roboto,Arial,sans-serif;
+      box-shadow:0 2px 6px rgba(0,0,0,.28);
+    ">${label}</div>`,
+  });
 }
 
-function createEndpointElement(label) {
-  const el = document.createElement("div");
-  el.className = "notranslate";
-  el.setAttribute("translate", "no");
-  el.style.cssText =
-    "width:28px;height:28px;border-radius:50%;background:#FFD400;color:#1D1D1B;border:2.5px solid #1D1D1B;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;font-family:Roboto,Arial,sans-serif;box-shadow:0 2px 6px rgba(0,0,0,.28);user-select:none;";
-  el.textContent = label;
-  return el;
-}
-
-function createTransferElement(stopName, fromLine, toLine) {
+function makeTransferIcon(stopName, fromLine, toLine) {
   const cleanStop = String(stopName || "Paragem")
     .replace(/, Lisboa.*$/i, "")
     .trim();
   const label = `Transbordo · ${cleanStop} · ${fromLine} → ${toLine}`;
-  const el = document.createElement("div");
-  el.className = "notranslate";
-  el.setAttribute("translate", "no");
-  el.style.cssText = "position:relative;width:28px;height:28px;user-select:none;";
-  el.innerHTML = `
-    <div style="position:absolute;bottom:36px;left:50%;transform:translateX(-50%);background:#FFFFFF;color:#1D1D1B;padding:6px 12px;border-radius:8px;box-shadow:0 3px 12px rgba(0,0,0,0.22);font-family:Roboto,Arial,sans-serif;font-size:12px;font-weight:700;white-space:nowrap;pointer-events:none;">
-      ${label}
-      <div style="position:absolute;bottom:-6px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:6px solid #FFFFFF;"></div>
-    </div>
-    <div style="width:28px;height:28px;border-radius:50%;background:#FFFFFF;border:2.5px solid #003F8F;color:#003F8F;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:800;box-shadow:0 2px 6px rgba(0,0,0,0.25);">
-      ⇄
-    </div>
-  `;
-  return el;
+
+  return L.divIcon({
+    className: "",
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+    html: `
+      <div translate="no" class="notranslate" style="position:relative;width:28px;height:28px;">
+        <div style="
+          position:absolute;
+          bottom:34px;
+          left:50%;
+          transform:translateX(-50%);
+          background:#FFFFFF;
+          color:#1D1D1B;
+          padding:5px 10px;
+          border-radius:8px;
+          box-shadow:0 3px 10px rgba(0,0,0,0.22);
+          font-family:Roboto,Arial,sans-serif;
+          font-size:11px;
+          font-weight:700;
+          white-space:nowrap;
+          pointer-events:none;
+        ">
+          ${label}
+          <div style="
+            position:absolute;
+            bottom:-5px;
+            left:50%;
+            transform:translateX(-50%);
+            width:0;height:0;
+            border-left:5px solid transparent;
+            border-right:5px solid transparent;
+            border-top:5px solid #FFFFFF;
+          "></div>
+        </div>
+        <div style="
+          width:28px;height:28px;border-radius:50%;
+          background:#FFFFFF;
+          border:2.5px solid #003F8F;
+          color:#003F8F;
+          display:flex;align-items:center;justify-content:center;
+          font-size:13px;font-weight:800;
+          box-shadow:0 2px 6px rgba(0,0,0,0.25);
+        ">⇄</div>
+      </div>
+    `,
+  });
 }
 
 export default function LiveMap({ origin, destination, route, getLineColor, height = 240 }) {
   const wrapperRef = useRef(null);
   const mapRef = useRef(null);
-  const markersRef = useRef([]);
+  const layerRef = useRef(null);
 
-  // Initialise MapLibre GL with OpenFreeMap Liberty style (clean, soft-palette vector map)
+  // Initialise Leaflet with standard OpenStreetMap tiles
   useEffect(() => {
     const wrapper = wrapperRef.current;
     if (!wrapper || mapRef.current) return;
@@ -182,50 +206,46 @@ export default function LiveMap({ origin, destination, route, getLineColor, heig
     wrapper.innerHTML = "";
     wrapper.appendChild(mapEl);
 
-    const map = new maplibregl.Map({
-      container: mapEl,
-      style: OPENFREEMAP_STYLE,
+    const map = L.map(mapEl, {
       center: LISBON_CENTER,
-      zoom: 12.5,
+      zoom: 13,
+      zoomControl: false,
       attributionControl: false,
     });
 
-    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
-    map.addControl(
-      new maplibregl.AttributionControl({
-        compact: false,
-        customAttribution: "GTFS Carris",
-      }),
-      "bottom-right"
-    );
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: "© OpenStreetMap contributors",
+    }).addTo(map);
 
+    L.control.zoom({ position: "topright" }).addTo(map);
+    L.control
+      .attribution({ position: "bottomright", prefix: false })
+      .addAttribution("© OpenStreetMap · GTFS Carris")
+      .addTo(map);
+
+    layerRef.current = L.layerGroup().addTo(map);
     mapRef.current = map;
 
     return () => {
-      markersRef.current.forEach((m) => {
-        try {
-          m.remove();
-        } catch {
-          // ignore
-        }
-      });
-      markersRef.current = [];
       try {
         map.remove();
       } catch {
-        // ignore DOM cleanup race
+        // Ignore DOM cleanup race
       }
       mapRef.current = null;
+      layerRef.current = null;
     };
   }, []);
 
-  // Draw route polylines, stop dots, transfer callout, and A/B markers when route changes
+  // Draw route polylines & markers whenever the selected route changes
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
+    const group = layerRef.current;
+    if (!map || !group) return;
     const controller = new AbortController();
 
-    const renderRouteOnMap = async () => {
+    (async () => {
       const steps = (route?.compressedSteps || []).filter((s) => s.mode !== "ARRIVE");
       const hasGeometry = steps.some((s) => Array.isArray(s.polylines) && s.polylines.length > 0);
       const segments = [];
@@ -252,7 +272,7 @@ export default function LiveMap({ origin, destination, route, getLineColor, heig
           geocode(origin, controller.signal),
           geocode(destination, controller.signal),
         ]);
-        if (controller.signal.aborted || !mapRef.current) return;
+        if (controller.signal.aborted || !mapRef.current || !layerRef.current) return;
 
         let cursor = oCoords;
         for (let i = 0; i < steps.length; i++) {
@@ -260,7 +280,7 @@ export default function LiveMap({ origin, destination, route, getLineColor, heig
           if (s.mode === "TRANSIT") {
             const dep = await geocode(s.departure_stop, controller.signal);
             const arr = await geocode(s.arrival_stop, controller.signal);
-            if (controller.signal.aborted || !mapRef.current) return;
+            if (controller.signal.aborted || !mapRef.current || !layerRef.current) return;
             if (cursor && dep) {
               segments.push({
                 pts: [cursor, dep],
@@ -302,232 +322,98 @@ export default function LiveMap({ origin, destination, route, getLineColor, heig
             isTransit: false,
           });
         }
+        if (segments.length === 0 && oCoords && dCoords) {
+          segments.push({
+            pts: [oCoords, dCoords],
+            step: { mode: "TRANSIT" },
+            color: "#003F8F",
+            isWalk: false,
+            isTransit: true,
+          });
+        }
       }
 
-      if (controller.signal.aborted || !mapRef.current) return;
+      if (controller.signal.aborted || !mapRef.current || !layerRef.current) return;
 
-      // Clear previous markers
-      markersRef.current.forEach((m) => {
-        try {
-          m.remove();
-        } catch {
-          // ignore
-        }
-      });
-      markersRef.current = [];
+      group.clearLayers();
+      const allPts = [];
 
-      // Convert [[lat, lng], ...] into GeoJSON [[lng, lat], ...]
-      const toLngLat = (pt) => [pt[1], pt[0]];
-
-      const transitFeatures = segments
-        .filter((seg) => !seg.isWalk)
-        .map((seg) => ({
-          type: "Feature",
-          properties: { color: seg.color },
-          geometry: {
-            type: "LineString",
-            coordinates: seg.pts.map(toLngLat),
-          },
-        }));
-
-      const walkFeatures = segments
-        .filter((seg) => seg.isWalk)
-        .map((seg) => ({
-          type: "Feature",
-          properties: {},
-          geometry: {
-            type: "LineString",
-            coordinates: seg.pts.map(toLngLat),
-          },
-        }));
-
-      const stopFeatures = [];
+      // 1. Soft grey casing behind the entire route
       for (const seg of segments) {
-        if (seg.isTransit) {
-          const stopDots = sampleStopPoints(seg.pts, seg.step?.stop_count || 6);
-          for (const pt of stopDots) {
-            stopFeatures.push({
-              type: "Feature",
-              properties: {},
-              geometry: {
-                type: "Point",
-                coordinates: toLngLat(pt),
-              },
-            });
-          }
-        }
+        allPts.push(...seg.pts);
+        L.polyline(seg.pts, {
+          color: "#9E9E99",
+          weight: seg.isWalk ? 6 : 9,
+          opacity: 0.4,
+          lineCap: "round",
+          lineJoin: "round",
+        }).addTo(group);
       }
 
-      const applyGeoJsonLayers = () => {
-        if (!mapRef.current || controller.signal.aborted) return;
-
-        const transitFC = { type: "FeatureCollection", features: transitFeatures };
-        const walkFC = { type: "FeatureCollection", features: walkFeatures };
-        const stopsFC = { type: "FeatureCollection", features: stopFeatures };
-
-        if (map.getSource("carris-transit")) {
-          map.getSource("carris-transit").setData(transitFC);
-        } else {
-          map.addSource("carris-transit", { type: "geojson", data: transitFC });
-          map.addLayer({
-            id: "carris-transit-casing",
-            type: "line",
-            source: "carris-transit",
-            layout: { "line-cap": "round", "line-join": "round" },
-            paint: { "line-color": "#8E9299", "line-width": 10, "line-opacity": 0.72 },
-          });
-          map.addLayer({
-            id: "carris-transit-line",
-            type: "line",
-            source: "carris-transit",
-            layout: { "line-cap": "round", "line-join": "round" },
-            paint: { "line-color": ["get", "color"], "line-width": 5.5, "line-opacity": 1 },
-          });
-        }
-
-        if (map.getSource("carris-walk")) {
-          map.getSource("carris-walk").setData(walkFC);
-        } else {
-          map.addSource("carris-walk", { type: "geojson", data: walkFC });
-          map.addLayer({
-            id: "carris-walk-line",
-            type: "line",
-            source: "carris-walk",
-            layout: { "line-cap": "round", "line-join": "round" },
-            paint: {
-              "line-color": "#585862",
-              "line-width": 3.5,
-              "line-dasharray": [1.5, 2],
-              "line-opacity": 0.85,
-            },
-          });
-        }
-
-        if (map.getSource("carris-stops")) {
-          map.getSource("carris-stops").setData(stopsFC);
-        } else {
-          map.addSource("carris-stops", { type: "geojson", data: stopsFC });
-          map.addLayer({
-            id: "carris-stops-circle",
-            type: "circle",
-            source: "carris-stops",
-            paint: {
-              "circle-radius": 4,
-              "circle-color": "#787878",
-              "circle-stroke-color": "#FFFFFF",
-              "circle-stroke-width": 2,
-            },
-          });
-        }
-      };
-
-      if (map.isStyleLoaded()) {
-        applyGeoJsonLayers();
-      } else {
-        map.once("load", applyGeoJsonLayers);
+      // 2. Main colored transit & walk lines
+      for (const seg of segments) {
+        L.polyline(seg.pts, {
+          color: seg.color,
+          weight: seg.isWalk ? 4 : 5.5,
+          opacity: 0.95,
+          dashArray: seg.isWalk ? "6 8" : undefined,
+          lineCap: "round",
+          lineJoin: "round",
+        }).addTo(group);
       }
 
-      // Add transfer marker & callout if there are 2+ transit segments
-      const transitSegments = segments.filter((s) => s.isTransit);
-      if (transitSegments.length >= 2) {
-        const firstTransit = transitSegments[0];
-        const secondTransit = transitSegments[1];
+      // 3. Transfer callout between consecutive transit segments
+      const transitSegments = segments.filter((seg) => seg.isTransit && seg.pts.length > 0);
+      for (let i = 0; i < transitSegments.length - 1; i++) {
+        const currSeg = transitSegments[i];
+        const nextSeg = transitSegments[i + 1];
         const transferPt =
-          secondTransit.pts[0] || firstTransit.pts[firstTransit.pts.length - 1];
+          nextSeg.pts[0] || currSeg.pts[currSeg.pts.length - 1];
         if (transferPt) {
           const stopName =
-            secondTransit.step?.departure_stop ||
-            firstTransit.step?.arrival_stop ||
-            "Transbordo";
-          const fromCode = cleanLineCode(firstTransit.step);
-          const toCode = cleanLineCode(secondTransit.step);
-          const m = new maplibregl.Marker({
-            element: createTransferElement(stopName, fromCode, toCode),
-            anchor: "center",
-          })
-            .setLngLat(toLngLat(transferPt))
-            .addTo(map);
-          markersRef.current.push(m);
+            nextSeg.step.departure_stop && nextSeg.step.departure_stop !== "N/A"
+              ? nextSeg.step.departure_stop
+              : currSeg.step.arrival_stop || "Paragem";
+          const fromCode = cleanLineCode(currSeg.step);
+          const toCode = cleanLineCode(nextSeg.step);
+          L.marker(transferPt, {
+            icon: makeTransferIcon(stopName, fromCode, toCode),
+            zIndexOffset: 900,
+          }).addTo(group);
         }
       }
 
-      // Determine exact start (A) and end (B) coordinates from geometry (or fallback geocoding)
-      let startCoord = segments.length > 0 ? segments[0].pts[0] : null;
-      let endCoord =
-        segments.length > 0
-          ? segments[segments.length - 1].pts[segments[segments.length - 1].pts.length - 1]
-          : null;
-
-      if (!startCoord || !endCoord) {
-        const [oCoords, dCoords] = await Promise.all([
-          geocode(origin, controller.signal),
-          geocode(destination, controller.signal),
-        ]);
-        if (controller.signal.aborted || !mapRef.current) return;
-        startCoord = startCoord || oCoords;
-        endCoord = endCoord || dCoords;
+      // 4. Endpoint A and B badges
+      if (allPts.length >= 2) {
+        const start = allPts[0];
+        const end = allPts[allPts.length - 1];
+        L.marker(start, { icon: makeEndpointIcon("A"), zIndexOffset: 1000 })
+          .bindTooltip(`Origem: ${origin || "A"}`)
+          .addTo(group);
+        L.marker(end, { icon: makeEndpointIcon("B"), zIndexOffset: 1000 })
+          .bindTooltip(`Destino: ${destination || "B"}`)
+          .addTo(group);
+        map.fitBounds(L.latLngBounds(allPts), { padding: [36, 36], maxZoom: 15 });
       }
-
-      const allLngLats = [];
-      for (const seg of segments) {
-        for (const pt of seg.pts) {
-          allLngLats.push(toLngLat(pt));
-        }
-      }
-
-      if (startCoord) {
-        const mA = new maplibregl.Marker({
-          element: createEndpointElement("A"),
-          anchor: "center",
-        })
-          .setLngLat(toLngLat(startCoord))
-          .addTo(map);
-        markersRef.current.push(mA);
-        allLngLats.push(toLngLat(startCoord));
-      }
-
-      if (endCoord) {
-        const mB = new maplibregl.Marker({
-          element: createEndpointElement("B"),
-          anchor: "center",
-        })
-          .setLngLat(toLngLat(endCoord))
-          .addTo(map);
-        markersRef.current.push(mB);
-        allLngLats.push(toLngLat(endCoord));
-      }
-
-      if (allLngLats.length > 1) {
-        const bounds = allLngLats.reduce(
-          (b, coord) => b.extend(coord),
-          new maplibregl.LngLatBounds(allLngLats[0], allLngLats[0])
-        );
-        try {
-          map.fitBounds(bounds, { padding: 42, maxZoom: 15, duration: 350 });
-        } catch {
-          // ignore bounds error
-        }
-      } else if (allLngLats.length === 1) {
-        map.setCenter(allLngLats[0]);
-        map.setZoom(14);
-      }
-    };
-
-    renderRouteOnMap();
+    })();
 
     return () => controller.abort();
   }, [origin, destination, route, getLineColor]);
 
   return (
     <div
-      ref={wrapperRef}
+      translate="no"
+      className="notranslate"
       style={{
-        position: "absolute",
-        inset: 0,
+        position: "relative",
         height: `${height}px`,
-        width: "100%",
-        zIndex: 0,
+        borderRadius: "12px",
+        overflow: "hidden",
+        border: "1px solid #E2E0DC",
+        background: "#EAE6DF",
       }}
-    />
+    >
+      <div ref={wrapperRef} style={{ width: "100%", height: "100%" }} />
+    </div>
   );
 }

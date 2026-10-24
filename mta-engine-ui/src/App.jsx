@@ -200,11 +200,34 @@ export default function App() {
     }
   };
 
-  const getModeIcon = (mode) => {
-    if (mode === "CITIBIKE") return <Bike className="w-5 h-5 text-sky-400" />;
-    if (mode === "WALK") return <Footprints className="w-5 h-5 text-slate-400" />;
-    if (mode === "ARRIVE") return <MapPin className="w-5 h-5 text-emerald-400" />;
-    return <Train className="w-5 h-5 text-amber-400" />;
+  const getModeIcon = (stepOrMode) => {
+    const step = typeof stepOrMode === "object" && stepOrMode !== null ? stepOrMode : { mode: stepOrMode };
+    const mode = step.mode;
+    if (mode === "CITIBIKE") return <span className="text-base leading-none">🚲</span>;
+    if (mode === "WALK") return <span className="text-base leading-none">🚶</span>;
+    if (mode === "ARRIVE") return <span className="text-base leading-none">🏁</span>;
+
+    const raw = `${step.line_id || ""} ${step.line_name || ""} ${step.line_display || ""}`.toUpperCase();
+    const code = String(step.line_id || "").toUpperCase().trim();
+    if (step.is_ferry || /FERRY|TRANSTEJO|SOFLUSA|BARCO/.test(raw)) {
+      return <span className="text-base leading-none">⛴️</span>;
+    }
+    if (
+      step.is_commuter_rail ||
+      /\b(CP|COMBOIO|COMBOIOS|SINTRA|CASCAIS|AZAMBUJA|FERTAGUS|SADO|RAIL|TRAIN)\b/.test(raw)
+    ) {
+      return <span className="text-base leading-none">🚆</span>;
+    }
+    if (/^[0-9]+E$/.test(code) || /ELÉTRICO|ELETRICO|TRAM/.test(raw)) {
+      return <span className="text-base leading-none">🚋</span>;
+    }
+    if (
+      step.is_bus === false ||
+      /\b(METRO|METROPOLITANO|SUBWAY|AZUL|AMARELA|VERDE|VERMELHA|BLUE|YELLOW|GREEN|RED|VD|VM|AZ|AM)\b/.test(raw)
+    ) {
+      return <span className="text-base leading-none">🚇</span>;
+    }
+    return <span className="text-base leading-none">🚌</span>;
   };
 
   const activeRoute = results[activeRouteIdx] || results[0];
@@ -610,7 +633,7 @@ export default function App() {
                         <div className="bg-white/[0.02] border border-white/[0.04] rounded-xl p-3.5 flex items-start justify-between gap-3 hover:border-white/[0.1] transition-colors">
                           <div className="flex items-start gap-3">
                             <div className="p-2 rounded-lg bg-white/[0.04] shrink-0 mt-0.5">
-                              {getModeIcon(step.mode)}
+                              {getModeIcon(step)}
                             </div>
                             <div>
                               <div className="font-semibold text-sm text-white">

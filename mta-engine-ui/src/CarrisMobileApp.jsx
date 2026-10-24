@@ -40,6 +40,36 @@ function getLineColor(code) {
   return { bg: "#003F8F", fg: "#FFFFFF" };
 }
 
+function getStepEmoji(step) {
+  if (!step) return "🚌";
+  if (step.mode === "WALK") return "🚶";
+  if (step.mode === "ARRIVE") return "🏁";
+  if (step.mode === "CITIBIKE") return "🚲";
+
+  const raw = `${step.line_id || ""} ${step.line_name || ""} ${step.line_display || ""}`.toUpperCase();
+  const code = String(step.line_id || "").toUpperCase().trim();
+
+  if (step.is_ferry || /FERRY|TRANSTEJO|SOFLUSA|BARCO/.test(raw)) {
+    return "⛴️";
+  }
+  if (
+    step.is_commuter_rail ||
+    /\b(CP|COMBOIO|COMBOIOS|SINTRA|CASCAIS|AZAMBUJA|FERTAGUS|SADO|RAIL|TRAIN)\b/.test(raw)
+  ) {
+    return "🚆";
+  }
+  if (/^[0-9]+E$/.test(code) || /ELÉTRICO|ELETRICO|TRAM/.test(raw)) {
+    return "🚋";
+  }
+  if (
+    step.is_bus === false ||
+    /\b(METRO|METROPOLITANO|SUBWAY|AZUL|AMARELA|VERDE|VERMELHA|BLUE|YELLOW|GREEN|RED|VD|VM|AZ|AM)\b/.test(raw)
+  ) {
+    return "🚇";
+  }
+  return "🚌";
+}
+
 function getReliabilityBand(score) {
   if (score >= 70) {
     return {
@@ -1699,7 +1729,7 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                                         gap: "4px",
                                       }}
                                     >
-                                      <span style={{ fontSize: "13px" }}>🚌</span>
+                                      <span style={{ fontSize: "13px" }}>{getStepEmoji(s)}</span>
                                       <span
                                         style={{
                                           background: lc.bg,
@@ -2269,7 +2299,7 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                       >
                         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                           <span style={{ fontSize: "16px" }}>
-                            {isArrive ? "🏁" : isWalk ? "🚶" : step.mode === "CITIBIKE" ? "🚲" : "🚌"}
+                            {getStepEmoji(step)}
                           </span>
                           <div>
                             <div style={{ fontWeight: 600, color: "#1D1D1B" }}>{cleanLabel}</div>
