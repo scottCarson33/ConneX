@@ -17,6 +17,40 @@ import {
 } from "lucide-react";
 import CarrisMobileApp from "./CarrisMobileApp";
 
+// Catches render errors so the CARRISway app shows a recoverable message instead of a blank page
+class CarrisErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(error, info) {
+    console.error("CARRISway crashed:", error, info);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ padding: 24, fontFamily: "Roboto, Arial, sans-serif", textAlign: "center" }}>
+          <h2 style={{ margin: "0 0 8px" }}>Algo correu mal</h2>
+          <p style={{ color: "#585862", fontSize: 13, margin: "0 0 12px" }}>
+            {String(this.state.error?.message || this.state.error)}
+          </p>
+          <button
+            type="button"
+            onClick={() => this.setState({ error: null })}
+            style={{ padding: "10px 16px", borderRadius: 8, border: 0, background: "#FFD400", fontWeight: 700, cursor: "pointer" }}
+          >
+            Tentar novamente
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function App() {
   const [viewMode, setViewMode] = useState("carris");
   const [origin, setOrigin] = useState("Praça do Comércio");
@@ -197,7 +231,11 @@ export default function App() {
   }, [activeRoute]);
 
   if (viewMode === "carris") {
-    return <CarrisMobileApp onSwitchToClassic={() => setViewMode("classic")} />;
+    return (
+      <CarrisErrorBoundary>
+        <CarrisMobileApp onSwitchToClassic={() => setViewMode("classic")} />
+      </CarrisErrorBoundary>
+    );
   }
 
   return (

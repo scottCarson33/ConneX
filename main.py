@@ -130,6 +130,7 @@ def compress_consecutive_walk_steps(itinerary: List[Dict]) -> List[Dict]:
             if compressed and compressed[-1].get("mode") == "WALK":
                 # Merge into the existing walk step
                 compressed[-1]["baseline_duration"] += dur
+                compressed[-1]["polylines"] = compressed[-1].get("polylines", []) + step.get("polylines", [])
                 if step.get("arrival_stop") and step["arrival_stop"] != "N/A":
                     clean_arr = clean_display_destination(step["arrival_stop"])
                     compressed[-1]["arrival_stop"] = clean_arr
@@ -430,6 +431,11 @@ def fetch_google_itineraries(
     try:
         response = requests.post(ROUTES_ENDPOINT, json=payload, headers=headers, timeout=5)
         data = response.json()
+        if response.status_code != 200:
+            logger.warning(
+                f"Google Routes API returned {response.status_code}: "
+                f"{data.get('error', {}).get('message', '')[:200]}"
+            )
     except Exception as e:
         logger.warning(f"Google Routes API call failed ({e}); falling back to Lisbon transit routing.")
         data = {}
@@ -453,6 +459,8 @@ def fetch_google_itineraries(
         for i, step in enumerate(steps_list):
             mode = step.get("travelMode", "WALK")
             dur = parse_v2_duration(step.get("staticDuration", "0s"))
+            enc_poly = (step.get("polyline") or {}).get("encodedPolyline")
+            step_polys = [enc_poly] if enc_poly else []
 
             if mode == "WALK":
                 next_stop = destination
@@ -472,6 +480,7 @@ def fetch_google_itineraries(
                 # If previous step was already a WALK step, combine into one instruction block
                 if raw_steps and raw_steps[-1]["mode"] == "WALK":
                     raw_steps[-1]["baseline_duration"] += dur
+                    raw_steps[-1]["polylines"] = raw_steps[-1].get("polylines", []) + step_polys
                     raw_steps[-1]["line_display"] = walk_display
                     raw_steps[-1]["arrival_stop"] = clean_dest
                     continue
@@ -489,6 +498,7 @@ def fetch_google_itineraries(
                         "arrival_stop": clean_dest,
                         "line_display": walk_display,
                         "scheduled_departure": None,
+                        "polylines": step_polys,
                     }
                 )
 
@@ -581,6 +591,7 @@ def fetch_google_itineraries(
                         "arrival_stop": arr_stop,
                         "line_display": line_display,
                         "scheduled_departure": sched_dep,
+                        "polylines": step_polys,
                     }
                 )
 
@@ -789,6 +800,8 @@ def create_fallback_lisbon_itineraries(origin: str, destination: str, target_tim
     }
 
     routes = [r1, r2, r3]
+    for r in routes:
+        r["is_fallback"] = True
     if allow_bike:
         bike_alt = inject_citibike_alternative(r1, destination)
         if bike_alt:
@@ -1550,6 +1563,7 @@ def run_simulation(req: SimulationRequest):
                 "temp_c": weather.get("temp_c"),
             },
             "data": payload,
+            "route_source": "fallback" if any(r.get("is_fallback") for r in payload) else "google",
             "navegante_pass": {
                 "monthly_municipal": 30.00,  # Navegante Municipal (Lisbon only)
                 "monthly_metropolitan": 40.00,  # Navegante Metropolitano (greater Lisbon)

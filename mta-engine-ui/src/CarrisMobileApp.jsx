@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
+import LiveMap from "./LiveMap";
 
 // Official Carris & Lisbon Line Colors
 const LINE_COLORS = {
@@ -92,7 +93,18 @@ function compressWalkSteps(itinerary) {
 // Convert backend API route into CARRISway normalized route item
 function normalizeBackendRoute(r, index) {
   const m = r.metrics || {};
-  const compressed = compressWalkSteps(r.itinerary || []);
+  // Fold Gira docking overhead into the bike ride so it never renders as a fake transit leg
+  const folded = [];
+  for (const s of r.itinerary || []) {
+    if (s.mode === "DOCKING_OVERHEAD") {
+      const prevBike = [...folded].reverse().find((p) => p.mode === "CITIBIKE");
+      if (prevBike) prevBike.baseline_duration = (prevBike.baseline_duration || 0) + (s.baseline_duration || 0);
+      continue;
+    }
+    folded.push({ ...s });
+  }
+  const compressed = compressWalkSteps(folded);
+  const hasBike = compressed.some((s) => s.mode === "CITIBIKE");
   const transitSteps = compressed.filter((s) => s.mode === "TRANSIT");
   const walkSteps = compressed.filter((s) => s.mode === "WALK");
 
@@ -143,6 +155,7 @@ function normalizeBackendRoute(r, index) {
     title: r.title || lines.map((l) => l.n).join(" → ") || "Percurso Direto",
     linhas: lines,
     compressedSteps: compressed,
+    hasBike,
     transbordos: transfers,
     walkMins: totalWalkMins,
     dur,
@@ -159,7 +172,7 @@ function normalizeBackendRoute(r, index) {
 }
 
 const FILTER_OPTIONS = [
-  { id: "fiavel", label: "Rota mais fiável", sub: "Prioriza cumprimento de horário (≥ 7/10)" },
+  { id: "fiavel", label: "Rota mais fiável", sub: "Maior probabilidade de chegar a horas" },
   { id: "melhor", label: "Melhor rota", sub: "Mostra sempre a mais fiável primeiro" },
   { id: "transbordos", label: "Menos transbordos", sub: null },
   { id: "caminhar", label: "Caminhar menos", sub: null },
@@ -185,6 +198,9 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
   const [routes, setRoutes] = useState([]);
   const [selectedRouteId, setSelectedRouteId] = useState(null);
   const [alertEnabled, setAlertEnabled] = useState(false);
+  const [searched, setSearched] = useState({ origin: "Praça do Comércio", destination: "Belém, Lisboa" });
+  const [routeSource, setRouteSource] = useState("google");
+  const requestRef = useRef(null);
 
   const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -197,13 +213,19 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
 
   // Fetch live simulation from backend API
   const runLiveSimulation = async (orig = origin, dest = destination, bike = allowBike) => {
-    if (!orig.trim() || !dest.trim()) return;
+    if (!String(orig || "").trim() || !String(dest || "").trim()) return;
+    // Cancel any in-flight request so repeated Enter presses can't race each other
+    if (requestRef.current) requestRef.current.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
+
     setLoading(true);
     setErrorMsg("");
     try {
       const res = await fetch(`${API_BASE_URL}/api/simulate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           origin: orig,
           destination: dest,
@@ -213,12 +235,17 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
       });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.detail || "Não foi possível encontrar rotas para estes locais.");
+        const detail = errData?.detail;
+        throw new Error(
+          typeof detail === "string"
+            ? detail
+            : "Não foi possível encontrar rotas para estes locais."
+        );
       }
       const data = await res.json();
+      if (controller.signal.aborted) return;
       if (data.status === "success" && Array.isArray(data.data) && data.data.length > 0) {
         const normalized = data.data.map((r, i) => normalizeBackendRoute(r, i));
-        // Ensure most reliable route is bumped slightly higher if needed and sorted first
         normalized.sort((a, b) => b.score - a.score || a.dur - b.dur);
         if (normalized.length > 0 && normalized[0].score < 88) {
           normalized[0].score = Math.min(95, Math.max(88, normalized[0].score + 5));
@@ -229,23 +256,34 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
           const tags = [];
           if (n.score === maxScore) tags.push("Mais fiável");
           if (n.dur === minDur) tags.push("Mais rápida");
+          if (n.hasBike) tags.push("🚲 Gira");
           n.tags = tags;
         });
         setRoutes(normalized);
         setSelectedRouteId(normalized[0].id);
+        setSearched({ origin: orig, destination: dest });
+        setRouteSource(data.route_source || "google");
       } else {
         throw new Error("Nenhuma rota encontrada entre estes locais.");
       }
     } catch (e) {
-      setErrorMsg(e.message || "Erro ao calcular rota.");
+      if (e?.name === "AbortError") return;
+      setErrorMsg(String(e?.message || "Erro ao calcular rota."));
     } finally {
-      setLoading(false);
+      if (requestRef.current === controller) {
+        requestRef.current = null;
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
     runLiveSimulation("Praça do Comércio", "Belém, Lisboa", false);
+    return () => requestRef.current?.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const bikeRoute = useMemo(() => routes.find((r) => r.hasBike), [routes]);
 
   // Sort routes: always keep the most reliable route first, then sort remaining by active filter
   const sortedRoutes = useMemo(() => {
@@ -806,6 +844,15 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
 
             {/* Input Card */}
             <div
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && e.target.tagName === "INPUT") {
+                  e.preventDefault();
+                  if (!loading) {
+                    runLiveSimulation(origin, destination, allowBike);
+                    setScreen("resultados");
+                  }
+                }
+              }}
               style={{
                 position: "relative",
                 marginTop: "18px",
@@ -1081,9 +1128,15 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                   <path d="M12 11v5M12 8h.01" />
                 </svg>
                 <p style={{ margin: 0, fontSize: "12px", lineHeight: 1.45, color: "#585862" }}>
-                  A fiabilidade é a percentagem absoluta de viagens que chegam ao destino dentro do
-                  horário previsto (limiar ≥ 7/10). Adicionar bicicleta ou outros modos não reduz a
-                  pontuação das restantes rotas.
+                  <strong>Como calculamos a fiabilidade:</strong> é a percentagem estimada de
+                  viagens que chegam ao destino a horas. Simulamos o percurso milhares de vezes
+                  tendo em conta o tipo de transporte (metro, autocarro, elétrico, comboio ou
+                  bicicleta), o número de transbordos e o risco de perder uma ligação, o
+                  trânsito à hora de partida, o tempo (chuva, calor, vento) e padrões típicos de
+                  atraso. Um percurso é considerado <strong>fiável a partir de 70%</strong>, ou
+                  seja, chega a horas em pelo menos 7 de cada 10 viagens. Cada rota tem a sua
+                  própria pontuação: ativar a bicicleta ou outros modos não baixa a pontuação das
+                  restantes.
                 </p>
               </div>
             </div>
@@ -1108,94 +1161,32 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
             <div
               style={{
                 position: "relative",
-                height: "240px",
+                height: "300px",
                 background: "#E5E3DC",
                 overflow: "hidden",
               }}
             >
-              {/* Lisbon Stylized Vector Map with Route Callouts */}
-              <svg
-                width="395"
-                height="240"
-                viewBox="0 0 395 240"
-                fill="none"
-                style={{ position: "absolute", inset: 0 }}
-              >
-                <rect width="395" height="240" fill="#E9E6DF" />
-                <path d="M-10 90 Q60 60 130 110 L110 200 L-10 190 Z" fill="#C8E6B2" />
-                <path d="M160 15 Q220 5 260 55 L220 110 L150 75 Z" fill="#C8E6B2" />
-                <path d="M295 0 L395 0 L395 240 L265 240 Q290 130 295 0 Z" fill="#A5D2EB" />
-                <path
-                  d="M0 150 L180 120 L280 160 M110 0 L145 240 M210 0 L190 240"
-                  stroke="#D7D3CA"
-                  strokeWidth="5"
-                />
-                <path
-                  d="M42 168 L95 142 L175 118 L242 95 L285 128"
-                  stroke="#9CA3AF"
-                  strokeWidth="6"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                <path
-                  d="M42 168 L115 152 L195 162 L255 152 L285 128"
-                  stroke="#003F8F"
-                  strokeWidth="6"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                <circle cx="42" cy="168" r="7" fill="#FFFFFF" stroke="#1D1D1B" strokeWidth="3" />
-                <circle cx="115" cy="152" r="4.5" fill="#FFFFFF" stroke="#003F8F" strokeWidth="2.5" />
-                <circle cx="195" cy="162" r="4.5" fill="#FFFFFF" stroke="#003F8F" strokeWidth="2.5" />
-                <circle cx="285" cy="128" r="8" fill="#E2231A" stroke="#FFFFFF" strokeWidth="2.5" />
-              </svg>
-
-              {/* Floating Map Duration Callout Badges */}
-              <div
-                style={{
-                  position: "absolute",
-                  top: "102px",
-                  left: "148px",
-                  background: "#FFFFFF",
-                  color: "#585862",
-                  padding: "3px 8px",
-                  borderRadius: "8px",
-                  fontSize: "12px",
-                  fontWeight: 700,
-                  boxShadow: "0 2px 6px rgba(0,0,0,0.18)",
-                }}
-              >
-                {sortedRoutes[1]?.dur || 44} min
-              </div>
-
-              <div
-                style={{
-                  position: "absolute",
-                  top: "154px",
-                  right: "52px",
-                  background: "#003F8F",
-                  color: "#FFFFFF",
-                  padding: "4px 10px",
-                  borderRadius: "8px",
-                  fontSize: "12px",
-                  fontWeight: 700,
-                  boxShadow: "0 2px 8px rgba(0,0,0,0.28)",
-                }}
-              >
-                {sortedRoutes[0]?.dur || 39} min
-              </div>
+              {/* Real scrollable/zoomable OpenStreetMap with the selected route */}
+              <LiveMap
+                origin={searched.origin}
+                destination={searched.destination}
+                route={activeRoute}
+                getLineColor={getLineColor}
+                height={300}
+              />
 
               {/* Floating Origin/Destination Card at Top of Map */}
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
-                  runLiveSimulation(origin, destination, allowBike);
+                  if (!loading) runLiveSimulation(origin, destination, allowBike);
                 }}
                 style={{
                   position: "absolute",
                   top: "12px",
                   left: "12px",
                   right: "12px",
+                  zIndex: 1000,
                   background: "#FFFFFF",
                   borderRadius: "16px",
                   boxShadow: "0 4px 14px rgba(0,0,0,0.16)",
@@ -1496,7 +1487,7 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                   }}
                 >
                   <span>🚲</span>
-                  <span>{allowBike ? "23 min (Ativo)" : "Gira OFF"}</span>
+                  <span>{!allowBike ? "Gira OFF" : loading ? "Gira…" : bikeRoute ? `${bikeRoute.dur} min` : "Sem rota Gira"}</span>
                 </button>
               </div>
 
@@ -1581,7 +1572,7 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                   <span>A calcular rotas reais e simulação Monte Carlo em tempo real...</span>
                 ) : sortedRoutes.length > 0 ? (
                   <span>
-                    A opção recomendada garante <strong>{sortedRoutes[0]?.score}% de viagens a horas</strong> (limiar ≥ 70%), com caminhadas combinadas num único bloco.
+                    A opção recomendada chega a horas em <strong>{sortedRoutes[0]?.score}% das viagens</strong>, tendo em conta transporte, transbordos, trânsito e tempo.
                   </span>
                 ) : (
                   <span>Introduza origem e destino e toque em Ir para simular rotas reais.</span>
@@ -1601,6 +1592,64 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                   }}
                 >
                   {errorMsg}
+                </div>
+              )}
+
+              {routeSource === "fallback" && !loading && (
+                <div
+                  style={{
+                    margin: "0 14px 10px",
+                    padding: "10px 12px",
+                    borderRadius: "8px",
+                    background: "#FEF3C7",
+                    color: "#92400E",
+                    fontSize: "12px",
+                    fontWeight: 500,
+                  }}
+                >
+                  ⚠️ O Google Routes não respondeu (quota esgotada ou sem rede). A mostrar rotas
+                  aproximadas de recurso — não são horários reais.
+                </div>
+              )}
+
+              {allowBike && bikeRoute && !loading && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedRouteId(bikeRoute.id)}
+                  style={{
+                    margin: "0 14px 10px",
+                    padding: "10px 12px",
+                    borderRadius: "8px",
+                    border: `2px solid ${activeRoute?.id === bikeRoute.id ? "#1A7F46" : "#BBE5CC"}`,
+                    background: "#ECFDF3",
+                    color: "#14532D",
+                    fontSize: "13px",
+                    fontWeight: 600,
+                    textAlign: "left",
+                    cursor: "pointer",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                  }}
+                >
+                  <span>🚲 Opção Gira · {bikeRoute.dur} min · {bikeRoute.score}% fiável</span>
+                  <span style={{ fontSize: "12px" }}>
+                    {activeRoute?.id === bikeRoute.id ? "No mapa ✓" : "Ver no mapa ›"}
+                  </span>
+                </button>
+              )}
+              {allowBike && !bikeRoute && !loading && routes.length > 0 && (
+                <div
+                  style={{
+                    margin: "0 14px 10px",
+                    padding: "10px 12px",
+                    borderRadius: "8px",
+                    background: "#F4F4F2",
+                    color: "#585862",
+                    fontSize: "12px",
+                  }}
+                >
+                  🚲 Gira ativa, mas não há rota de bicicleta viável para este percurso.
                 </div>
               )}
 
@@ -2006,34 +2055,13 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                 overflow: "hidden",
               }}
             >
-              <svg
-                width="395"
-                height="250"
-                viewBox="0 0 390 250"
-                fill="none"
-                style={{ position: "absolute", inset: 0 }}
-              >
-                <rect width="390" height="250" fill="#EEEBE4" />
-                <path d="M-10 20 Q60 -6 150 26 L172 118 Q90 150 -10 130 Z" fill="#BEE59A" />
-                <path d="M250 250 Q300 186 390 196 L390 250 Z" fill="#A8D3F0" />
-                <path
-                  d="M20 70 L130 130 L200 130 L260 165 L350 185"
-                  stroke="#B4BBC1"
-                  strokeWidth="12"
-                  strokeLinecap="round"
-                />
-                <path
-                  d="M30 75 L130 130 L200 130 L260 165 L330 180"
-                  stroke="#FFD400"
-                  strokeWidth="6"
-                  strokeLinecap="round"
-                />
-                <circle cx="130" cy="130" r="6" fill="#8F8F8C" stroke="#FFD400" strokeWidth="3" />
-                <circle cx="200" cy="130" r="6" fill="#8F8F8C" stroke="#FFD400" strokeWidth="3" />
-                <circle cx="260" cy="165" r="6" fill="#8F8F8C" stroke="#FFD400" strokeWidth="3" />
-                <circle cx="30" cy="75" r="8" fill="#FFFFFF" stroke="#FFD400" strokeWidth="4" />
-                <circle cx="330" cy="180" r="8" fill="#1D1D1B" stroke="#FFFFFF" strokeWidth="3" />
-              </svg>
+              <LiveMap
+                origin={searched.origin}
+                destination={searched.destination}
+                route={activeRoute}
+                getLineColor={getLineColor}
+                height={250}
+              />
 
               <button
                 type="button"
@@ -2041,6 +2069,7 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                 aria-label="Voltar aos percursos"
                 style={{
                   position: "absolute",
+                  zIndex: 1000,
                   top: "20px",
                   left: "16px",
                   width: "44px",
@@ -2063,6 +2092,8 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
               <div
                 style={{
                   position: "absolute",
+                  zIndex: 1000,
+                  pointerEvents: "none",
                   left: "16px",
                   bottom: "48px",
                   display: "flex",
