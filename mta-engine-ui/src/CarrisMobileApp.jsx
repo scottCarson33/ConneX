@@ -232,7 +232,30 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
   const [alertEnabled, setAlertEnabled] = useState(false);
   const [searched, setSearched] = useState({ origin: "Praça do Comércio", destination: "Belém, Lisboa" });
   const [routeSource, setRouteSource] = useState("google");
+  const [timeMode, setTimeMode] = useState("depart_at"); // 'depart_at' | 'arrive_by'
+  const [customTime, setCustomTime] = useState(null); // null ('Partir agora') or { hour, minute }
+  const [showTimeModal, setShowTimeModal] = useState(false);
+  const [draftTimeMode, setDraftTimeMode] = useState("depart_at");
+  const [draftHour, setDraftHour] = useState(() => new Date().getHours());
+  const [draftMinute, setDraftMinute] = useState(() => new Date().getMinutes());
   const requestRef = useRef(null);
+
+  const pad2 = (n) => String(n).padStart(2, "0");
+
+  const openTimeModal = () => {
+    const now = new Date();
+    setDraftTimeMode(timeMode);
+    setDraftHour(customTime ? customTime.hour : now.getHours());
+    setDraftMinute(customTime ? customTime.minute : now.getMinutes());
+    setShowTimeModal(true);
+  };
+
+  const buildTargetTimeIso = (timeObj) => {
+    if (!timeObj) return null;
+    const d = new Date();
+    d.setHours(timeObj.hour, timeObj.minute, 0, 0);
+    return d.toISOString();
+  };
 
   const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -244,7 +267,13 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
   ];
 
   // Fetch live simulation from backend API
-  const runLiveSimulation = async (orig = origin, dest = destination, bike = allowBike) => {
+  const runLiveSimulation = async (
+    orig = origin,
+    dest = destination,
+    bike = allowBike,
+    tMode = timeMode,
+    tCustom = customTime
+  ) => {
     if (!String(orig || "").trim() || !String(dest || "").trim()) return;
     // Cancel any in-flight request so repeated Enter presses can't race each other
     if (requestRef.current) requestRef.current.abort();
@@ -261,7 +290,8 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
         body: JSON.stringify({
           origin: orig,
           destination: dest,
-          time_mode: "depart_at",
+          time_mode: tMode,
+          target_time: buildTargetTimeIso(tCustom),
           allow_bike: bike,
         }),
       });
@@ -1028,7 +1058,21 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                   padding: "8px 12px",
                 }}
               >
-                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <button
+                  type="button"
+                  onClick={openTimeModal}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    background: "transparent",
+                    border: "none",
+                    padding: "4px 6px",
+                    marginLeft: "-6px",
+                    borderRadius: "6px",
+                    cursor: "pointer",
+                  }}
+                >
                   <svg
                     width="20"
                     height="20"
@@ -1040,8 +1084,22 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                     <circle cx="12" cy="12" r="9" />
                     <path d="M12 7v5l3 2" />
                   </svg>
-                  <span style={{ fontSize: "14px", color: "#1D1D1B" }}>Partir agora</span>
-                </div>
+                  <span style={{ fontSize: "14px", fontWeight: 500, color: "#1D1D1B" }}>
+                    {customTime
+                      ? `${timeMode === "arrive_by" ? "Chegada até" : "Saída às"} ${pad2(customTime.hour)}:${pad2(customTime.minute)}`
+                      : "Partir agora"}
+                  </span>
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="#585862"
+                    strokeWidth="2.2"
+                  >
+                    <path d="M6 9l6 6 6-6" />
+                  </svg>
+                </button>
 
                 <button
                   type="button"
@@ -1383,17 +1441,36 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                 padding: "0 2px",
               }}
             >
-              <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "#585862" }}>
+              <button
+                type="button"
+                onClick={openTimeModal}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  fontSize: "12px",
+                  color: "#585862",
+                  background: "transparent",
+                  border: "none",
+                  padding: "2px 4px",
+                  marginLeft: "-4px",
+                  borderRadius: "6px",
+                  cursor: "pointer",
+                  textAlign: "left",
+                }}
+              >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#003F8F" strokeWidth="2">
                   <circle cx="12" cy="12" r="9" />
                   <path d="M12 7v5l3 2" />
                 </svg>
                 <span>
-                  Dia útil · partida às{" "}
-                  {String(sortedRoutes[0]?.sai || "09:45").replace(/\s*(AM|PM)/i, "")} ·{" "}
-                  {sortedRoutes.length} percursos
+                  Dia útil · {timeMode === "arrive_by" ? "chegada até" : "partida às"}{" "}
+                  {customTime
+                    ? `${pad2(customTime.hour)}:${pad2(customTime.minute)}`
+                    : String(sortedRoutes[0]?.sai || "09:45").replace(/\s*(AM|PM)/i, "")}{" "}
+                  ▾ · {sortedRoutes.length} percursos
                 </span>
-              </div>
+              </button>
 
               <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                 <button
@@ -2457,6 +2534,315 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
               </button>
             </div>
           </section>
+        )}
+
+        {/* ============================================================
+            TIME SELECTION MODAL (Matches Uploaded Screenshot)
+           ============================================================ */}
+        {showTimeModal && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Selecionar hora"
+            onClick={() => setShowTimeModal(false)}
+            style={{
+              position: "absolute",
+              inset: 0,
+              zIndex: 2500,
+              background: "rgba(29, 29, 27, 0.45)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: "20px",
+            }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                width: "100%",
+                maxWidth: "340px",
+                background: "#FFFFFF",
+                borderRadius: "16px",
+                boxShadow: "0 12px 36px rgba(0, 0, 0, 0.28)",
+                padding: "16px 18px 18px",
+                display: "flex",
+                flexDirection: "column",
+                gap: "14px",
+              }}
+            >
+              {/* Top Tabs: Saída às / Chegada até */}
+              <div
+                style={{
+                  display: "flex",
+                  borderBottom: "1px solid #E6E6E3",
+                }}
+              >
+                {[
+                  { id: "depart_at", label: "Saída às" },
+                  { id: "arrive_by", label: "Chegada até" },
+                ].map((tab) => {
+                  const active = draftTimeMode === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setDraftTimeMode(tab.id)}
+                      style={{
+                        flex: 1,
+                        padding: "10px 8px 12px",
+                        background: "transparent",
+                        border: "none",
+                        borderBottom: active ? "3px solid #00767A" : "3px solid transparent",
+                        color: active ? "#003F8F" : "#585862",
+                        fontSize: "15px",
+                        fontWeight: active ? 700 : 500,
+                        cursor: "pointer",
+                        marginBottom: "-1px",
+                      }}
+                    >
+                      <span>{tab.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* 5-Row Wheel / Column Time Selector (HH : MM) */}
+              <div
+                translate="no"
+                className="notranslate"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "18px",
+                  padding: "6px 0",
+                  userSelect: "none",
+                }}
+              >
+                {/* Hours Column (00-23) */}
+                <div
+                  onWheel={(e) => {
+                    e.preventDefault();
+                    const delta = e.deltaY > 0 ? 1 : -1;
+                    setDraftHour((h) => (h + delta + 24) % 24);
+                  }}
+                  style={{
+                    width: "96px",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                  }}
+                >
+                  {[-2, -1, 0, 1, 2].map((offset) => {
+                    const hr = (draftHour + offset + 24) % 24;
+                    const isCenter = offset === 0;
+                    const isOuter = Math.abs(offset) === 2;
+                    return isCenter ? (
+                      <div
+                        key={offset}
+                        style={{
+                          position: "relative",
+                          width: "100%",
+                          height: "46px",
+                          borderTop: "1px solid #B8B8B4",
+                          borderBottom: "1px solid #B8B8B4",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          fontSize: "24px",
+                          fontWeight: 700,
+                          color: "#1D1D1B",
+                        }}
+                      >
+                        <span>{pad2(hr)}</span>
+                        <select
+                          aria-label="Hora"
+                          value={draftHour}
+                          onChange={(e) => setDraftHour(Number(e.target.value))}
+                          style={{
+                            position: "absolute",
+                            inset: 0,
+                            opacity: 0,
+                            cursor: "pointer",
+                            width: "100%",
+                            height: "100%",
+                          }}
+                        >
+                          {Array.from({ length: 24 }, (_, i) => (
+                            <option key={i} value={i}>
+                              {pad2(i)}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    ) : (
+                      <button
+                        key={offset}
+                        type="button"
+                        onClick={() => setDraftHour(hr)}
+                        style={{
+                          width: "100%",
+                          height: isOuter ? "28px" : "38px",
+                          background: "transparent",
+                          border: "none",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          fontSize: isOuter ? "18px" : "21px",
+                          fontWeight: 400,
+                          color: "#8E8E93",
+                          opacity: isOuter ? 0.55 : 0.9,
+                          cursor: "pointer",
+                        }}
+                      >
+                        <span>{pad2(hr)}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Colon Separator */}
+                <span
+                  style={{
+                    fontSize: "24px",
+                    fontWeight: 700,
+                    color: "#1D1D1B",
+                    paddingBottom: "2px",
+                  }}
+                >
+                  :
+                </span>
+
+                {/* Minutes Column (00-59) */}
+                <div
+                  onWheel={(e) => {
+                    e.preventDefault();
+                    const delta = e.deltaY > 0 ? 1 : -1;
+                    setDraftMinute((m) => (m + delta + 60) % 60);
+                  }}
+                  style={{
+                    width: "96px",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                  }}
+                >
+                  {[-2, -1, 0, 1, 2].map((offset) => {
+                    const mn = (draftMinute + offset + 60) % 60;
+                    const isCenter = offset === 0;
+                    const isOuter = Math.abs(offset) === 2;
+                    return isCenter ? (
+                      <div
+                        key={offset}
+                        style={{
+                          position: "relative",
+                          width: "100%",
+                          height: "46px",
+                          borderTop: "1px solid #B8B8B4",
+                          borderBottom: "1px solid #B8B8B4",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          fontSize: "24px",
+                          fontWeight: 700,
+                          color: "#1D1D1B",
+                        }}
+                      >
+                        <span>{pad2(mn)}</span>
+                        <select
+                          aria-label="Minuto"
+                          value={draftMinute}
+                          onChange={(e) => setDraftMinute(Number(e.target.value))}
+                          style={{
+                            position: "absolute",
+                            inset: 0,
+                            opacity: 0,
+                            cursor: "pointer",
+                            width: "100%",
+                            height: "100%",
+                          }}
+                        >
+                          {Array.from({ length: 60 }, (_, i) => (
+                            <option key={i} value={i}>
+                              {pad2(i)}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    ) : (
+                      <button
+                        key={offset}
+                        type="button"
+                        onClick={() => setDraftMinute(mn)}
+                        style={{
+                          width: "100%",
+                          height: isOuter ? "28px" : "38px",
+                          background: "transparent",
+                          border: "none",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          fontSize: isOuter ? "18px" : "21px",
+                          fontWeight: 400,
+                          color: "#8E8E93",
+                          opacity: isOuter ? 0.55 : 0.9,
+                          cursor: "pointer",
+                        }}
+                      >
+                        <span>{pad2(mn)}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Action Buttons: Cancelar / Definir */}
+              <div style={{ display: "flex", gap: "12px", marginTop: "4px" }}>
+                <button
+                  type="button"
+                  onClick={() => setShowTimeModal(false)}
+                  style={{
+                    flex: 1,
+                    height: "46px",
+                    borderRadius: "10px",
+                    border: "1px solid #D9D9D5",
+                    background: "#FFFFFF",
+                    color: "#003F8F",
+                    fontSize: "15px",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  <span>Cancelar</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const nextCustom = { hour: draftHour, minute: draftMinute };
+                    setTimeMode(draftTimeMode);
+                    setCustomTime(nextCustom);
+                    setShowTimeModal(false);
+                    if (screen === "resultados") {
+                      runLiveSimulation(origin, destination, allowBike, draftTimeMode, nextCustom);
+                    }
+                  }}
+                  style={{
+                    flex: 1,
+                    height: "46px",
+                    borderRadius: "10px",
+                    border: "none",
+                    background: "#00767A",
+                    color: "#FFFFFF",
+                    fontSize: "15px",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  <span>Definir</span>
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </main>
     </div>
