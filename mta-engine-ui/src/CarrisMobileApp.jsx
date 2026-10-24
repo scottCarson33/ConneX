@@ -230,6 +230,7 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
   const [routes, setRoutes] = useState([]);
   const [selectedRouteId, setSelectedRouteId] = useState(null);
   const [alertEnabled, setAlertEnabled] = useState(false);
+  const [boughtRouteId, setBoughtRouteId] = useState(null);
   const [searched, setSearched] = useState({ origin: "Ikonik Hotel", destination: "IGOT ULisboa" });
   const [routeSource, setRouteSource] = useState("google");
   const [timeMode, setTimeMode] = useState("depart_at"); // 'depart_at' | 'arrive_by'
@@ -539,7 +540,7 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
         }}
       >
         {/* ============================================================
-            SCREEN 1: MENU DA APP (CARRISway)
+            SCREEN 1: MENU DA APP (navegante)
            ============================================================ */}
         {screen === "menu" && (
           <section
@@ -553,38 +554,38 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
           >
             <div
               style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "28px 12px 0 24px",
+                position: "relative",
+                width: "100%",
+                height: "216px",
+                background: "#FFDD00",
+                overflow: "hidden",
+                marginBottom: "16px",
               }}
             >
-              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                <span
-                  style={{
-                    fontSize: "28px",
-                    fontWeight: 700,
-                    color: "#003F8F",
-                    letterSpacing: "-0.4px",
-                    lineHeight: 1,
-                  }}
-                >
-                  carris
-                </span>
-                <svg width="32" height="20" viewBox="0 0 32 20" fill="none">
-                  <circle cx="10" cy="10" r="7" stroke="#FFD400" strokeWidth="4" />
-                  <circle cx="22" cy="10" r="7" stroke="#003F8F" strokeWidth="4" />
-                </svg>
-              </div>
+              <img
+                src="/navegante.jpg"
+                alt="navegante"
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "cover",
+                  display: "block",
+                }}
+              />
               <button
                 type="button"
                 onClick={() => setScreen("resultados")}
                 aria-label="Fechar menu"
                 style={{
-                  width: "44px",
-                  height: "44px",
+                  position: "absolute",
+                  top: "18px",
+                  right: "14px",
+                  width: "40px",
+                  height: "40px",
                   border: 0,
-                  background: "transparent",
+                  borderRadius: "50%",
+                  background: "rgba(255, 255, 255, 0.9)",
+                  boxShadow: "0 2px 8px rgba(29,29,27,0.18)",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
@@ -592,11 +593,11 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                 }}
               >
                 <svg
-                  width="22"
-                  height="22"
+                  width="20"
+                  height="20"
                   viewBox="0 0 24 24"
                   fill="none"
-                  stroke="#003F8F"
+                  stroke="#1D1D1B"
                   strokeWidth="2.2"
                   strokeLinecap="round"
                 >
@@ -604,8 +605,6 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                 </svg>
               </button>
             </div>
-
-            <div style={{ flex: "0 0 140px" }} />
 
             <nav
               aria-label="Menu principal"
@@ -849,7 +848,10 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                 color: "#6B6B66",
               }}
             >
-              CARRISway · Versão 2.0.1
+              <span translate="no" className="notranslate">
+                navegante
+              </span>{" "}
+              · Versão 2.0.1
             </div>
           </section>
         )}
@@ -2372,6 +2374,41 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                         </span>
                       </div>
                     </div>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setBoughtRouteId(
+                          boughtRouteId === activeRoute.id ? null : activeRoute.id
+                        )
+                      }
+                      style={{
+                        width: "100%",
+                        minHeight: "46px",
+                        border: "none",
+                        borderRadius: "8px",
+                        background:
+                          boughtRouteId === activeRoute.id ? "#1A7F46" : "#FFD400",
+                        color:
+                          boughtRouteId === activeRoute.id ? "#FFFFFF" : "#1D1D1B",
+                        fontSize: "15px",
+                        fontWeight: 700,
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: "8px",
+                        boxShadow: "0 2px 8px rgba(29,29,27,0.12)",
+                      }}
+                    >
+                      {boughtRouteId === activeRoute.id ? (
+                        <span>
+                          ✓ Bilhete comprado · €{activeRoute.cost.toFixed(2)}
+                        </span>
+                      ) : (
+                        <span>Comprar agora · €{activeRoute.cost.toFixed(2)}</span>
+                      )}
+                    </button>
                   </div>
                 );
               })()}
@@ -2542,24 +2579,58 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setAlertEnabled(!alertEnabled)}
-                style={{
-                  minHeight: "48px",
-                  border: 0,
-                  borderRadius: "8px",
-                  background: alertEnabled ? "#1A7F46" : "#FFD400",
-                  color: alertEnabled ? "#FFFFFF" : "#1D1D1B",
-                  fontSize: "15px",
-                  fontWeight: 600,
-                  cursor: "pointer",
-                }}
-              >
-                {alertEnabled
-                  ? "✓ Alerta ativado · tocar para desativar"
-                  : "Ativar alerta de atrasos"}
-              </button>
+              <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setBoughtRouteId(
+                      boughtRouteId === activeRoute.id ? null : activeRoute.id
+                    )
+                  }
+                  style={{
+                    minHeight: "48px",
+                    border: 0,
+                    borderRadius: "8px",
+                    background:
+                      boughtRouteId === activeRoute.id ? "#1A7F46" : "#FFD400",
+                    color:
+                      boughtRouteId === activeRoute.id ? "#FFFFFF" : "#1D1D1B",
+                    fontSize: "15px",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    boxShadow: "0 2px 8px rgba(29,29,27,0.12)",
+                  }}
+                >
+                  {boughtRouteId === activeRoute.id ? (
+                    <span>
+                      ✓ Bilhete comprado · €{activeRoute.cost.toFixed(2)}
+                    </span>
+                  ) : (
+                    <span>Comprar agora · €{activeRoute.cost.toFixed(2)}</span>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setAlertEnabled(!alertEnabled)}
+                  style={{
+                    minHeight: "46px",
+                    border: "1px solid #D9D9D5",
+                    borderRadius: "8px",
+                    background: alertEnabled ? "#1A7F46" : "#FFFFFF",
+                    color: alertEnabled ? "#FFFFFF" : "#1D1D1B",
+                    fontSize: "14px",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  <span>
+                    {alertEnabled
+                      ? "✓ Alerta ativado · tocar para desativar"
+                      : "Ativar alerta de atrasos"}
+                  </span>
+                </button>
+              </div>
             </div>
           </section>
         )}

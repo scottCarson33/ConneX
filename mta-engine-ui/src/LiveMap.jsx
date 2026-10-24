@@ -227,7 +227,7 @@ export default function LiveMap({ origin, destination, route, getLineColor, heig
         ml.on("load", function () {
           if (mapa.attributionControl) {
             mapa.attributionControl.addAttribution(
-              'GTFS Carris · <a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> &copy; ' +
+              '<span translate="no" class="notranslate">navegante</span> · <a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> &copy; ' +
                 '<a href="https://www.openmaptiles.org/" target="_blank">OpenMapTiles</a>'
             );
           }
@@ -241,7 +241,7 @@ export default function LiveMap({ origin, destination, route, getLineColor, heig
     } else {
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 19,
-        attribution: "© OpenStreetMap · GTFS Carris",
+        attribution: "© OpenStreetMap · navegante",
       }).addTo(mapa);
     }
 
