@@ -8,7 +8,8 @@ const LINE_COLORS = {
   "731": { bg: "#E2231A", fg: "#FFFFFF" },
   "728": { bg: "#003F8F", fg: "#FFFFFF" },
   "701": { bg: "#00767A", fg: "#FFFFFF" },
-  "760": { bg: "#6A2C91", fg: "#FFFFFF" },
+  "760": { bg: "#8B4513", fg: "#FFFFFF" },
+  "767": { bg: "#D6006F", fg: "#FFFFFF" },
   "744": { bg: "#003F8F", fg: "#FFFFFF" },
   "708": { bg: "#D6006F", fg: "#FFFFFF" },
   "711": { bg: "#00767A", fg: "#FFFFFF" },
@@ -1476,13 +1477,13 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
               )}
             </div>
 
-            {/* MINIMAL GRAYSCALE SCROLLABLE MAP */}
+            {/* OPENSTREETMAP ROUTE MAP */}
             <div
               style={{
                 position: "relative",
-                height: "175px",
-                borderRadius: "10px",
-                background: "#E8E8E5",
+                height: "220px",
+                borderRadius: "12px",
+                background: "#EEEBE4",
                 border: "1px solid #D9D9D5",
                 overflow: "hidden",
               }}
@@ -1491,7 +1492,8 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                 origin={searched.origin}
                 destination={searched.destination}
                 route={activeRoute}
-                height={175}
+                getLineColor={getLineColor}
+                height={220}
               />
             </div>
 
@@ -1970,7 +1972,7 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
             <div
               style={{
                 position: "relative",
-                height: "250px",
+                height: "300px",
                 background: "#EEEBE4",
                 overflow: "hidden",
               }}
@@ -1980,7 +1982,7 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                 destination={searched.destination}
                 route={activeRoute}
                 getLineColor={getLineColor}
-                height={250}
+                height={300}
               />
 
               <button
@@ -1996,7 +1998,7 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                   height: "44px",
                   background: "#FFFFFF",
                   border: "none",
-                  borderRadius: "6px",
+                  borderRadius: "8px",
                   boxShadow: "0 2px 8px rgba(29,29,27,0.22)",
                   display: "flex",
                   alignItems: "center",
@@ -2023,12 +2025,14 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                 {activeRoute.linhas.map((l, idx) => (
                   <span
                     key={idx}
+                    translate="no"
+                    className="notranslate"
                     style={{
                       background: l.c.bg,
                       color: l.c.fg,
                       borderRadius: "30px",
                       padding: "4px 20px",
-                      fontSize: "24px",
+                      fontSize: "26px",
                       fontWeight: 700,
                       boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
                     }}
@@ -2037,6 +2041,37 @@ export default function CarrisMobileApp({ onSwitchToClassic }) {
                   </span>
                 ))}
               </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const nextOrig = destination;
+                  const nextDest = origin;
+                  swapLocations();
+                  runLiveSimulation(nextOrig, nextDest, allowBike);
+                }}
+                aria-label="Inverter o sentido"
+                style={{
+                  position: "absolute",
+                  zIndex: 1000,
+                  right: "16px",
+                  bottom: "48px",
+                  width: "46px",
+                  height: "46px",
+                  background: "#FFFFFF",
+                  border: "none",
+                  borderRadius: "8px",
+                  boxShadow: "0 2px 8px rgba(29,29,27,0.22)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  cursor: "pointer",
+                }}
+              >
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#003F8F" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M4 8h14M14 4l4 4-4 4M20 16H6M10 12l-4 4 4 4" />
+                </svg>
+              </button>
             </div>
 
             <div
